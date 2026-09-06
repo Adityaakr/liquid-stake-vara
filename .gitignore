@@ -7,3 +7,6 @@ dist
 coverage
 screenshots
 *.tsbuildinfo
+
+# Rust workspaces live on a separate branch; never track their build output here
+programs/

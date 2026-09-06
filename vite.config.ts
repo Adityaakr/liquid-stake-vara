@@ -21,5 +21,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // The Vara hooks bundle imports a CommonJS wallet shim; let Vite transform it under vitest.
+    server: { deps: { inline: ['@gear-js/react-hooks', '@gear-js/wallet-connect', '@gear-js/vara-ui', '@gear-js/ui', '@polkadot/react-identicon', '@varan-wallet/varan-connect'] } },
   },
 });
