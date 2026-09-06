@@ -11,8 +11,8 @@ describe('exchange rate math', () => {
     expect(formatVara(out, 4)).toBe('95.4016');
   });
   it('redeems VARA = kVARA × rate and round trips within dust', () => {
-    const vaultera = varaToKVara(100n * ONE_VARA, RATE);
-    const back = kVaraToVara(vaultera, RATE);
+    const kvara = varaToKVara(100n * ONE_VARA, RATE);
+    const back = kVaraToVara(kvara, RATE);
     expect(100n * ONE_VARA - back).toBeLessThan(10n);
   });
   it('rate 1.0 is identity', () => {

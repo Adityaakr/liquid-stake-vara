@@ -12,9 +12,9 @@ export function varaToKVara(vara: bigint, rate: bigint): bigint {
   return (vara * RATE_SCALE) / rate;
 }
 
-export function kVaraToVara(vaultera: bigint, rate: bigint): bigint {
+export function kVaraToVara(kvara: bigint, rate: bigint): bigint {
   if (rate <= 0n) throw new RangeError('rate must be positive');
-  return (vaultera * rate) / RATE_SCALE;
+  return (kvara * rate) / RATE_SCALE;
 }
 
 export function instantUnstakeFee(varaOut: bigint): bigint {
@@ -22,15 +22,15 @@ export function instantUnstakeFee(varaOut: bigint): bigint {
 }
 
 /** Instant exit: redeem at rate, minus the 0.3% fee. */
-export function instantUnstakeOut(vaultera: bigint, rate: bigint): { gross: bigint; fee: bigint; net: bigint } {
-  const gross = kVaraToVara(vaultera, rate);
+export function instantUnstakeOut(kvara: bigint, rate: bigint): { gross: bigint; fee: bigint; net: bigint } {
+  const gross = kVaraToVara(kvara, rate);
   const fee = instantUnstakeFee(gross);
   return { gross, fee, net: gross - fee };
 }
 
 /** Native exit: full rate, no fee, 7 day wait. */
-export function nativeUnstakeOut(vaultera: bigint, rate: bigint): bigint {
-  return kVaraToVara(vaultera, rate);
+export function nativeUnstakeOut(kvara: bigint, rate: bigint): bigint {
+  return kVaraToVara(kvara, rate);
 }
 
 /** Vault shares (4626 style): shares = assets / sharePrice, assets = shares × sharePrice. */
@@ -46,6 +46,17 @@ export function sharesToAssets(shares: bigint, sharePrice: bigint): bigint {
 /** Simple projection used for "potential earning" rows. apyBps is annual, compounding ignored on purpose (display only). */
 export function projectedYield(principal: bigint, apyBps: bigint, days: number): bigint {
   return (principal * apyBps * BigInt(Math.round(days))) / (BPS * 365n);
+}
+
+export const YEAR_MS = 365n * 24n * 60n * 60n * 1000n;
+
+/**
+ * A rate (or share price) `elapsedMs` later at `apyBps`, simple interest between checkpoints.
+ * Rates only move forward: a negative elapsed time returns the rate unchanged.
+ */
+export function accrueRate(rate: bigint, apyBps: bigint, elapsedMs: number): bigint {
+  if (elapsedMs <= 0) return rate;
+  return rate + (rate * apyBps * BigInt(Math.floor(elapsedMs))) / (BPS * YEAR_MS);
 }
 
 export type AmountValidation = { ok: true } | { ok: false; reason: 'empty' | 'zero' | 'insufficient' | 'invalid' };
