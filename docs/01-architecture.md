@@ -1,4 +1,4 @@
-# Vaultera v1 architecture
+# Vale Protocol v1 architecture
 
 Status: decided 2026-09-03 (Prism ship, lean pass). Gates G0 and G1 were cleared on stated
 assumptions because the brief asked for an end-to-end build; every assumption is listed below
@@ -27,14 +27,14 @@ Two surfaces, one Vite app:
 
 ## Assumptions (G0 defaults)
 
-1. Vara mainnet only (changed 2026-09-03 at the owner's request; the earlier testnet-first default is gone). RPC is `wss://rpc.vara.network`, overridable with `VITE_VARA_RPC`.
+1. Vara mainnet only. RPC is `wss://rpc.vara.network`, overridable with `VITE_VARA_RPC`.
 2. No staking program is deployed yet. The app runs on a `MockAdapter` that simulates the
    protocol exactly as the kit describes it (rate 1.0482, 14.2% APY, 0.3% instant fee, 7 day
    unbond). A `GearAdapter` reads real native VARA balances from mainnet and is wired to accept a
    program id and IDL through env vars when a program exists. The UI shows a "simulation" badge
    whenever the adapter is not talking to a real program.
 3. Wallets: any Substrate injected extension (Polkadot.js, SubWallet, Talisman, Nova).
-4. Token names exactly as the kit: `kVARA`, `kUSDT`, `kUSDC`. Wordmark `vaultera`.
+4. Token names exactly as the kit: `kVARA`, `kUSDT`, `kUSDC`. Wordmark `vale`.
 5. No backend. Stats come from the adapter.
 6. v1 scope: landing, stake, unstake (instant and native), claim unbonded, vaults deposit,
    portfolio. Deferred: borrowing, governance, analytics.
