@@ -1,0 +1,219 @@
+
+!@sails: 1.0.1
+
+service Vft@0x46e25d0a680addcd {
+    events {
+        Approval {
+            owner: ActorId,
+            spender: ActorId,
+            value: U256,
+        },
+        Transfer {
+            from: ActorId,
+            to: ActorId,
+            value: U256,
+        },
+    }
+    functions {
+        @query
+        Allowance(owner: ActorId, spender: ActorId) -> U256;
+        Approve(spender: ActorId, value: U256) -> bool throws VaultError;
+        @query
+        BalanceOf(account: ActorId) -> U256;
+        @query
+        Decimals() -> u8;
+        @query
+        Name() -> String;
+        @query
+        Symbol() -> String;
+        @query
+        TotalSupply() -> U256;
+        Transfer(to: ActorId, value: U256) -> bool throws VaultError;
+        TransferFrom(from: ActorId, to: ActorId, value: U256) -> bool throws VaultError;
+    }
+    types {
+        enum VaultError {
+            Paused,
+            ZeroAddress,
+            ZeroAmount,
+            BelowMinimum {
+                min: U256,
+            },
+            InsufficientShares,
+            InsufficientBalance,
+            InsufficientAllowance,
+            Unauthorized,
+            Overflow,
+            BadConfig,
+            UnbondNotFound,
+            UnbondNotReady {
+                claimable_at: u64,
+            },
+            /// The underlying token rejected the transfer (allowance, balance, paused).
+            TokenRejected(String),
+            /// The cross-program call failed to complete (timeout, transport, panic).
+            TokenCall(String),
+            /// The message carried less gas than the async flow needs; nothing was moved.
+            NotEnoughGas {
+                required: u64,
+            },
+        }
+    }
+}
+
+service Vault@0xad38dfb2275efacd {
+    events {
+        Accrued {
+            rate: U256,
+            total_assets: U256,
+        },
+        AdminTransferred {
+            from: ActorId,
+            to: ActorId,
+        },
+        Claimed {
+            owner: ActorId,
+            id: u64,
+            assets: U256,
+        },
+        ConfigChanged {
+            apy_bps: u32,
+            instant_fee_bps: u32,
+            unbond_period_secs: u64,
+        },
+        Deposited {
+            owner: ActorId,
+            assets: U256,
+            shares: U256,
+            rate: U256,
+        },
+        FeesCollected {
+            to: ActorId,
+            assets: U256,
+        },
+        Paused {
+            by: ActorId,
+        },
+        Redeemed {
+            owner: ActorId,
+            shares: U256,
+            assets: U256,
+            fee: U256,
+            rate: U256,
+        },
+        ReserveToppedUp {
+            assets: U256,
+        },
+        Resumed {
+            by: ActorId,
+        },
+        UnbondRequested {
+            owner: ActorId,
+            id: u64,
+            shares: U256,
+            assets: U256,
+            claimable_at: u64,
+        },
+    }
+    functions {
+        Accrue() -> U256;
+        Claim(id: u64) -> Result<U256, VaultError>;
+        CollectFees(to: ActorId) -> Result<U256, VaultError>;
+        Deposit(assets: U256) -> Result<U256, VaultError>;
+        @query
+        Info() -> VaultInfo;
+        Pause() -> Result<bool, VaultError>;
+        @query
+        Position(account: ActorId) -> Position;
+        @query
+        PreviewDeposit(assets: U256) -> U256;
+        @query
+        PreviewRedeem(shares: U256) -> RedeemPreview;
+        @query
+        Rate() -> U256;
+        Redeem(shares: U256) -> Result<RedeemPreview, VaultError>;
+        RequestUnbond(shares: U256) -> Result<Unbond, VaultError>;
+        Resume() -> Result<bool, VaultError>;
+        SetConfig(apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> Result<bool, VaultError>;
+        TopUpReserve(assets: U256) -> Result<bool, VaultError>;
+        TransferAdmin(to: ActorId) -> Result<bool, VaultError>;
+        @query
+        Unbonds(account: ActorId) -> [Unbond];
+    }
+    types {
+        struct Position {
+            shares: U256,
+            assets: U256,
+        }
+        struct RedeemPreview {
+            assets: U256,
+            fee: U256,
+            net: U256,
+        }
+        struct Unbond {
+            id: u64,
+            shares: U256,
+            assets: U256,
+            requested_at: u64,
+            claimable_at: u64,
+        }
+        enum VaultError {
+            Paused,
+            ZeroAddress,
+            ZeroAmount,
+            BelowMinimum {
+                min: U256,
+            },
+            InsufficientShares,
+            InsufficientBalance,
+            InsufficientAllowance,
+            Unauthorized,
+            Overflow,
+            BadConfig,
+            UnbondNotFound,
+            UnbondNotReady {
+                claimable_at: u64,
+            },
+            /// The underlying token rejected the transfer (allowance, balance, paused).
+            TokenRejected(String),
+            /// The cross-program call failed to complete (timeout, transport, panic).
+            TokenCall(String),
+            /// The message carried less gas than the async flow needs; nothing was moved.
+            NotEnoughGas {
+                required: u64,
+            },
+        }
+        struct VaultInfo {
+            underlying: ActorId,
+            admin: ActorId,
+            name: String,
+            symbol: String,
+            decimals: u8,
+            /// Assets per share scaled by 1e18, projected to now.
+            rate: U256,
+            apy_bps: u32,
+            instant_fee_bps: u32,
+            unbond_period_secs: u64,
+            total_shares: U256,
+            /// Assets owed to share holders at the projected rate.
+            total_assets: U256,
+            /// Underlying the vault physically holds.
+            holdings: U256,
+            fees_accrued: U256,
+            unbonding_total: U256,
+            min_deposit: U256,
+            paused: bool,
+            last_accrual_at: u64,
+        }
+    }
+}
+
+program Vault {
+    constructors {
+        New(underlying: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64);
+    }
+    services {
+        Vft@0x46e25d0a680addcd,
+        Vault@0xad38dfb2275efacd,
+    }
+}

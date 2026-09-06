@@ -1,0 +1,162 @@
+
+!@sails: 1.0.1
+
+service Vft@0x694cb0ae4266d779 {
+    events {
+        Approval {
+            owner: ActorId,
+            spender: ActorId,
+            value: U256,
+        },
+        Transfer {
+            from: ActorId,
+            to: ActorId,
+            value: U256,
+        },
+    }
+    functions {
+        @query
+        Allowance(owner: ActorId, spender: ActorId) -> U256;
+        Approve(spender: ActorId, value: U256) -> bool throws TokenError;
+        @query
+        BalanceOf(account: ActorId) -> U256;
+        @query
+        Decimals() -> u8;
+        @query
+        Name() -> String;
+        @query
+        Symbol() -> String;
+        @query
+        TotalSupply() -> U256;
+        Transfer(to: ActorId, value: U256) -> bool throws TokenError;
+        TransferFrom(from: ActorId, to: ActorId, value: U256) -> bool throws TokenError;
+    }
+    types {
+        enum TokenError {
+            Paused,
+            ZeroAddress,
+            ZeroAmount,
+            InsufficientBalance,
+            InsufficientAllowance,
+            Unauthorized,
+            Overflow,
+            FaucetDisabled,
+            FaucetCooldown {
+                next_claim_at: u64,
+            },
+        }
+    }
+}
+
+service Admin@0x35c2d98dbcb918ed {
+    events {
+        AdminTransferred {
+            from: ActorId,
+            to: ActorId,
+        },
+        Burned {
+            from: ActorId,
+            value: U256,
+        },
+        FaucetConfigured {
+            amount: U256,
+            cooldown_secs: u64,
+        },
+        Minted {
+            to: ActorId,
+            value: U256,
+        },
+        MinterGranted {
+            account: ActorId,
+        },
+        MinterRevoked {
+            account: ActorId,
+        },
+        Paused {
+            by: ActorId,
+        },
+        Resumed {
+            by: ActorId,
+        },
+    }
+    functions {
+        @query
+        AdminAccount() -> ActorId;
+        Burn(from: ActorId, value: U256) -> bool throws TokenError;
+        GrantMinter(account: ActorId) -> bool throws TokenError;
+        @query
+        IsMinter(account: ActorId) -> bool;
+        @query
+        IsPaused() -> bool;
+        Mint(to: ActorId, value: U256) -> bool throws TokenError;
+        @query
+        Minters() -> [ActorId];
+        Pause() -> bool throws TokenError;
+        Resume() -> bool throws TokenError;
+        RevokeMinter(account: ActorId) -> bool throws TokenError;
+        SetFaucet(amount: U256, cooldown_secs: u64) -> bool throws TokenError;
+        TransferAdmin(to: ActorId) -> bool throws TokenError;
+    }
+    types {
+        enum TokenError {
+            Paused,
+            ZeroAddress,
+            ZeroAmount,
+            InsufficientBalance,
+            InsufficientAllowance,
+            Unauthorized,
+            Overflow,
+            FaucetDisabled,
+            FaucetCooldown {
+                next_claim_at: u64,
+            },
+        }
+    }
+}
+
+service Faucet@0xef5ecad8cf0ed342 {
+    events {
+        Claimed {
+            to: ActorId,
+            value: U256,
+            next_claim_at: u64,
+        },
+    }
+    functions {
+        Claim() -> Result<U256, TokenError>;
+        @query
+        Config() -> FaucetConfig;
+        @query
+        NextClaimAt(account: ActorId) -> u64;
+    }
+    types {
+        struct FaucetConfig {
+            amount: U256,
+            cooldown_secs: u64,
+        }
+        enum TokenError {
+            Paused,
+            ZeroAddress,
+            ZeroAmount,
+            InsufficientBalance,
+            InsufficientAllowance,
+            Unauthorized,
+            Overflow,
+            FaucetDisabled,
+            FaucetCooldown {
+                next_claim_at: u64,
+            },
+        }
+    }
+}
+
+program DemoTokenClient {
+    constructors {
+        New(name: String, symbol: String, decimals: u8, faucet_amount: U256, faucet_cooldown_secs: u64);
+    }
+    services {
+        Vft@0x694cb0ae4266d779,
+        Admin@0x35c2d98dbcb918ed,
+        Faucet@0xef5ecad8cf0ed342,
+    }
+}

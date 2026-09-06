@@ -8,5 +8,7 @@ coverage
 screenshots
 *.tsbuildinfo
 
-# Rust workspaces live on a separate branch; never track their build output here
-programs/
+# Rust build output and throwaway local deployments
+programs/*/target/
+deployments/local.json
+.local
