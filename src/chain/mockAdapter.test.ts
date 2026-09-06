@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MockAdapter } from './mockAdapter';
+import { MockAdapter, T0 } from './mockAdapter';
 import { ONE_STABLE, ONE_VARA } from '@/domain/protocol';
-import { instantUnstakeOut, varaToKVara } from '@/domain/math';
+import { instantUnstakeOut, sharesToAssets, varaToKVara } from '@/domain/math';
 
 const A = 'kGj1akEAemmGoVyFqeHVSNUyUj1mJp3gazUYy7Zs2p7BsgT88';
 let m: MockAdapter;
-beforeEach(() => { m = new MockAdapter('mainnet', { latencyMs: 0, storage: false }); });
+// A fixed clock keeps the kit numbers exact (rate 1.0482); the mock accrues per second otherwise.
+beforeEach(() => { m = new MockAdapter('mainnet', { latencyMs: 0, storage: false, now: () => T0 }); });
 
 describe('MockAdapter', () => {
   it('starts with the kit balances', async () => {
@@ -84,5 +85,46 @@ describe('MockAdapter regressions from review', () => {
     const results = await Promise.allSettled([m.stake(A, all), m.stake(A, ONE_VARA)]);
     expect(results[0].status).toBe('fulfilled');
     expect(results[1].status).toBe('rejected');
+  });
+});
+
+describe('MockAdapter accrual', () => {
+  it('rates accrue at the APY as the clock moves', async () => {
+    let t = T0;
+    const clock = new MockAdapter('mainnet', { latencyMs: 0, storage: false, now: () => t });
+    const before = await clock.getStats();
+    t = T0 + 365 * 24 * 3600 * 1000;
+    const after = await clock.getStats();
+    expect(after.rate).toBe(before.rate + (before.rate * 1420n) / 10_000n);
+    expect(after.vaultSharePrice.USDT).toBe(before.vaultSharePrice.USDT + (before.vaultSharePrice.USDT * 840n) / 10_000n);
+    expect(after.at).toBe(t);
+  });
+  it('tracks the principal behind receipts so earnings can be shown', async () => {
+    let t = T0;
+    const clock = new MockAdapter('mainnet', { latencyMs: 0, storage: false, now: () => t });
+    await clock.stake(A, 100n * ONE_VARA);
+    await clock.depositVault(A, 'USDT', 50n * ONE_STABLE);
+    let b = await clock.getBalances(A);
+    expect(b.principal.VARA).toBe(100n * ONE_VARA);
+    expect(b.principal.USDT).toBe(50n * ONE_STABLE);
+    t = T0 + 30 * 24 * 3600 * 1000;
+    await clock.unstakeInstant(A, b.kVARA / 2n);
+    b = await clock.getBalances(A);
+    const diff = b.principal.VARA - 50n * ONE_VARA;
+    expect(diff >= -1n && diff <= 1n).toBe(true); // proportional reduction, integer rounding
+  });
+});
+
+describe('MockAdapter vault exit', () => {
+  it('instant vault exit pays the asset minus the 0.3% fee', async () => {
+    await m.depositVault(A, 'USDT', 100n * ONE_STABLE);
+    const b = await m.getBalances(A);
+    const { vaultSharePrice } = await m.getStats();
+    await m.redeemVault(A, 'USDT', b.kUSDT);
+    const after = await m.getBalances(A);
+    const gross = sharesToAssets(b.kUSDT, vaultSharePrice.USDT);
+    expect(after.wUSDT - b.wUSDT).toBe(gross - (gross * 30n) / 10_000n);
+    expect(after.kUSDT).toBe(0n);
+    await expect(m.redeemVault(A, 'USDT', 1n)).rejects.toThrow(/Insufficient kUSDT/);
   });
 });

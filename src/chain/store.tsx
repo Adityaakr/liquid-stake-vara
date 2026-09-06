@@ -21,6 +21,8 @@ type Store = {
   connect: () => Promise<void>;
   connectDemo: () => void;
   disconnect: () => void;
+  /** Adopt an account chosen through the official wallet provider (or clear it). */
+  setExternalAccount: (a: Account | null) => void;
   balances: Balances | null;
   balancesError: string | null;
   unbonding: UnbondEntry[];
@@ -122,6 +124,14 @@ export function StoreProvider({ children, adapter: injected }: { children: React
 
   const disconnect = useCallback(() => { setAccount(null); setAccounts([]); rememberAccount(null); setBalances(null); setUnbonding([]); }, []);
   const selectAccount = useCallback((a: Account) => { setAccount(a); rememberAccount(a); }, []);
+  const setExternalAccount = useCallback((a: Account | null) => {
+    setAccount((prev) => {
+      if (a === null) return prev?.source === 'demo' ? prev : null;
+      return prev?.address === a.address && prev.source === a.source ? prev : a;
+    });
+    setAccounts(a ? [a] : []);
+    if (a) rememberAccount(a); else rememberAccount(null);
+  }, []);
   const setNetwork = useCallback((n: NetworkId) => { setNetworkState(n); setStats(null); setStatsError(null); setBalances(null); setBalancesError(null); setUnbonding([]); }, []);
 
   const run = useCallback<Store['run']>(async (label, fn, onDone) => {
@@ -146,7 +156,7 @@ export function StoreProvider({ children, adapter: injected }: { children: React
     } finally { inFlight.current = false; }
   }, [account, refresh, notify]);
 
-  const value: Store = { adapter, network, setNetwork, stats, statsError, account, accounts, selectAccount, connecting, connect, connectDemo, disconnect, balances, balancesError, unbonding, refresh, tx, run, toasts, notify, dismiss };
+  const value: Store = { adapter, network, setNetwork, stats, statsError, account, accounts, selectAccount, connecting, connect, connectDemo, disconnect, setExternalAccount, balances, balancesError, unbonding, refresh, tx, run, toasts, notify, dismiss };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

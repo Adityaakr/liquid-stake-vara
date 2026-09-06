@@ -1,6 +1,6 @@
 import type { NetworkId } from './types';
 
-/** Vaultera runs on Vara mainnet. The RPC endpoint is configurable through VITE_VARA_RPC. */
+/** Vale Protocol runs on Vara mainnet. The RPC endpoint is configurable through VITE_VARA_RPC. */
 export const NETWORKS: Record<NetworkId, { label: string; rpc: string; ss58: number; explorer: string }> = {
   mainnet: {
     label: 'Vara mainnet',

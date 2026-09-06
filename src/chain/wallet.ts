@@ -1,7 +1,7 @@
 import { ChainError, type Account } from './types';
 
-const APP_NAME = 'Vaultera';
-const KEY = 'vaultera.wallet.v1';
+export const APP_NAME = 'Vale Protocol';
+const KEY = 'vale.wallet.v1';
 
 /** Known injected wallets and how they name themselves in window.injectedWeb3. */
 export const WALLETS = [
@@ -20,7 +20,7 @@ export async function connectWallet(ss58 = 137): Promise<Account[]> {
   const { web3Enable, web3Accounts } = await import('@polkadot/extension-dapp');
   const injected = await web3Enable(APP_NAME);
   if (injected.length === 0) {
-    if (detectWallets().length > 0) throw new ChainError('The wallet denied access to Vaultera. Open the extension and allow this site.', 'REJECTED');
+    if (detectWallets().length > 0) throw new ChainError('The wallet denied access to Vale Protocol. Open the extension and allow this site.', 'REJECTED');
     throw new ChainError('No Substrate wallet extension found. Install Polkadot.js, SubWallet or Talisman.', 'NO_WALLET');
   }
   const accounts = await web3Accounts({ ss58Format: ss58 });
