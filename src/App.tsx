@@ -1,5 +1,7 @@
 import { createBrowserRouter, RouterProvider, ScrollRestoration, Outlet, useRouteError } from 'react-router';
+import { AccountProvider } from '@gear-js/react-hooks';
 import { StoreProvider } from '@/chain/store';
+import { APP_NAME } from '@/chain/wallet';
 import { LandingPage } from '@/landing/LandingPage';
 import { FeaturesPage } from '@/landing/FeaturesPage';
 import { AppLayout } from '@/app/AppLayout';
@@ -9,10 +11,12 @@ import { PortfolioPage } from '@/app/PortfolioPage';
 
 function Root() {
   return (
-    <StoreProvider>
-      <ScrollRestoration />
-      <Outlet />
-    </StoreProvider>
+    <AccountProvider appName={APP_NAME}>
+      <StoreProvider>
+        <ScrollRestoration />
+        <Outlet />
+      </StoreProvider>
+    </AccountProvider>
   );
 }
 
@@ -37,7 +41,7 @@ function NotFound() {
       <div>
         <div className="eyebrow" style={{ color: 'var(--fx-indigo)', marginBottom: 12 }}>404</div>
         <h1 style={{ fontSize: 40, fontWeight: 600 }}>Nothing here.</h1>
-        <p style={{ color: 'var(--text-2)', marginTop: 10 }}><a href="/">Back to vaultera</a></p>
+        <p style={{ color: 'var(--text-2)', marginTop: 10 }}><a href="/">Back to Vale Protocol</a></p>
       </div>
     </div>
   );

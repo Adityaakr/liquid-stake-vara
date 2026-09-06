@@ -19,7 +19,7 @@
 .ap-stake{display:grid;grid-template-columns:1fr 344px;gap:20px;align-items:start}
 .ap-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .ap-grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
-.ap-vaults{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:stretch}
+.ap-vaults{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;align-items:stretch}
 .ap-yield{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:center}
 .ap-pill{font-family:var(--font-body);font-size:13px;font-weight:500;color:var(--text-2);border:1px solid var(--fx-mist);border-radius:99px;padding:8px 14px;background:var(--fx-lgb);white-space:nowrap}
 .ap-exit{flex:1;text-align:left;cursor:pointer;background:#fff;border:1px solid var(--fx-mist);border-radius:16px;padding:12px 14px;transition:all var(--dur-1) var(--ease-out);color:var(--text-1)}
@@ -33,7 +33,7 @@
 .ap-acct[aria-pressed=true]{border-color:var(--accent-line);background:var(--accent-soft)}
 .ap-wallet{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid var(--fx-mist);border-radius:16px;background:#fff;color:var(--text-1);text-decoration:none}
 .ap-wallet:hover{border-color:var(--line-3);color:var(--text-1)}
-@media (max-width:1040px){.ap-stake{grid-template-columns:1fr}.ap-grid-4{grid-template-columns:1fr 1fr}.ap-vaults{grid-template-columns:1fr}.ap-yield{grid-template-columns:1fr}}
+@media (max-width:1040px){.ap-stake{grid-template-columns:1fr}.ap-grid-4{grid-template-columns:1fr 1fr}.ap-vaults{grid-template-columns:1fr 1fr}.ap-yield{grid-template-columns:1fr}}
 @media (max-width:860px){
   .ap-side{display:none}
   .ap-top{height:62px;padding:0 16px;gap:10px}
@@ -43,3 +43,8 @@
   .ap-mobile-bar .ap-nav{flex-direction:column;gap:4px;height:52px;font-size:11px;justify-content:center;padding:0}
 }
 @media (max-width:560px){.ap-grid-4,.ap-grid-2{grid-template-columns:1fr}}
+@media (max-width:640px){.ap-vaults{grid-template-columns:1fr}}
+.ap-demo{width:100%;margin-bottom:10px;padding:8px 10px;border-radius:12px;border:1px dashed var(--accent-line);background:var(--accent-soft);color:var(--fx-indigo);font-family:var(--font-body);font-size:12.5px;font-weight:600;cursor:pointer}
+.ap-demo:hover{border-style:solid}
+.ap-demo-top{display:none;width:auto;margin:0;padding:8px 12px}
+@media (max-width:1040px){.ap-demo-top{display:inline-block}}

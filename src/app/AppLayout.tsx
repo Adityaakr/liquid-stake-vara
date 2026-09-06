@@ -8,6 +8,7 @@ import { NETWORKS } from '@/chain/networks';
 import { formatCountdown, formatRate, shortAddress } from '@/domain/format';
 import { useNow } from './bits';
 import { WalletDialog } from './WalletDialog';
+import { Wordmark } from '@/landing/Nav';
 
 const TITLES: Record<string, string> = { '/app': 'Stake', '/app/vaults': 'Stable vaults', '/app/portfolio': 'Portfolio' };
 
@@ -29,12 +30,17 @@ function useEraProgress() {
 }
 
 function NetworkCard() {
-  const { stats, statsError, network, adapter } = useStore();
+  const { stats, statsError, network, adapter, account, connectDemo, disconnect } = useStore();
   const { pct, left } = useEraProgress();
   return (
     <Bento variant="app" pad={14}>
+      {adapter.simulated && !account && (
+        <button type="button" className="ap-demo" onClick={connectDemo}>Use a demo account</button>
+      )}
+      {account?.source === 'demo' && (
+        <button type="button" className="ap-demo" onClick={disconnect}>Leave the demo account</button>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text-1)', fontWeight: 500 }}>
-        <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--ok)' }} />
         {NETWORKS[network].label}
         {adapter.simulated && <Badge size="sm" tone="warn" style={{ marginLeft: 'auto' }}>simulation</Badge>}
       </div>
@@ -57,7 +63,7 @@ function Sidebar() {
   return (
     <aside className="ap-side">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px', marginBottom: 28 }}>
-        <NavLink to="/" style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 24, letterSpacing: '-0.02em', color: 'var(--text-1)', textDecoration: 'none' }}>vaultera</NavLink>
+        <Wordmark size={22} />
         <Badge size="sm" mono>app</Badge>
       </div>
       <nav aria-label="App" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -78,8 +84,8 @@ function Sidebar() {
 
 function TopBar({ onWallet }: { onWallet: () => void }) {
   const { pathname } = useLocation();
-  const { stats, account } = useStore();
-  const title = TITLES[pathname] ?? 'Vaultera';
+  const { stats, account, adapter, connectDemo } = useStore();
+  const title = TITLES[pathname] ?? 'Vale Protocol';
   return (
     <div className="ap-top">
       <div>
@@ -88,6 +94,7 @@ function TopBar({ onWallet }: { onWallet: () => void }) {
       <span className="ap-pill ap-rate" style={{ marginLeft: 'auto' }}>
         1 kVARA = <span style={{ color: 'var(--fx-indigo)', fontWeight: 600 }} className={stats ? undefined : 'skeleton'}>{stats ? formatRate(stats.rate) : '0.0000'}</span> VARA
       </span>
+      {!account && adapter.simulated && <button type="button" className="ap-demo ap-demo-top" onClick={connectDemo}>Demo</button>}
       {account ? (
         <button type="button" onClick={onWallet} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', marginLeft: stats ? 0 : 'auto' }} aria-label="Account">
           <Badge tone="accent" mono dot>{shortAddress(account.address)}</Badge>
@@ -113,7 +120,7 @@ export function AppLayout() {
   const [walletOpen, setWalletOpen] = useState(false);
   const { toasts, dismiss } = useStore();
   const { pathname } = useLocation();
-  useEffect(() => { document.title = `${TITLES[pathname] ?? 'Vaultera'} · Vaultera app`; }, [pathname]);
+  useEffect(() => { document.title = `${TITLES[pathname] ?? 'Vale Protocol'} · Vale Protocol app`; }, [pathname]);
   return (
     <div className="ap-root">
       <Sidebar />

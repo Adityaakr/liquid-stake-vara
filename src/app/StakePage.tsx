@@ -1,16 +1,26 @@
 import { useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router';
 import { ChartPie, Coins, Star, Wallet } from 'lucide-react';
-import { AmountField, Badge, Bento, Button, Tabs } from '@/ui';
+import { AmountField, Badge, Bento, Button, Tabs, type TokenSymbol } from '@/ui';
 import { useStore } from '@/chain/store';
-import { instantUnstakeOut, nativeUnstakeOut, validateAmount, varaToKVara } from '@/domain/math';
-import { bpsToPercent, formatCompactUsd, formatCountdown, formatRate, formatUsd, formatVara, parseVara, toNumber } from '@/domain/format';
-import { VARA_DECIMALS } from '@/domain/protocol';
+import type { DepositAsset } from '@/chain/types';
+import { accrueRate, assetsToShares, sharesToAssets, validateAmount } from '@/domain/math';
+import { bpsToPercent, formatCompactUsd, formatCountdown, formatRate, formatUnits, formatUsd, parseUnits, toNumber } from '@/domain/format';
+import { BPS, INSTANT_UNSTAKE_FEE_BPS, STABLE_DECIMALS, VARA_DECIMALS } from '@/domain/protocol';
 import { Eyebrow, IRow, useNow } from './bits';
 import type { AppOutlet } from './AppLayout';
 
 type Tab = 'Stake' | 'Unstake';
 type Path = 'instant' | 'native';
+
+/** Everything the stake box needs per asset. Receipts are always k-prefixed. */
+const ASSETS: Record<DepositAsset, { deposit: TokenSymbol; receipt: TokenSymbol; decimals: number }> = {
+  VARA: { deposit: 'VARA', receipt: 'kVARA', decimals: VARA_DECIMALS },
+  USDT: { deposit: 'wUSDT', receipt: 'kUSDT', decimals: STABLE_DECIMALS },
+  USDC: { deposit: 'wUSDC', receipt: 'kUSDC', decimals: STABLE_DECIMALS },
+};
+const ORDER: DepositAsset[] = ['VARA', 'USDT', 'USDC'];
+const assetOf = (t: TokenSymbol): DepositAsset => (t.replace(/^[wk]/, '') as DepositAsset);
 
 function ExitOption({ title, sub, active, onClick }: { title: string; sub: string; active: boolean; onClick: () => void }) {
   return (
@@ -27,27 +37,36 @@ export function StakePage() {
   const { openWallet } = useOutletContext<AppOutlet>();
   const { stats, statsError, balances, balancesError, account, adapter, tx, run } = useStore();
   const [tab, setTab] = useState<Tab>('Stake');
+  const [asset, setAsset] = useState<DepositAsset>('VARA');
   const [amt, setAmt] = useState('');
   const [path, setPath] = useState<Path>('instant');
   const [touched, setTouched] = useState(false);
   const now = useNow();
-  const switchTab = (t: Tab) => { setTab(t); setAmt(''); setTouched(false); };
+  const reset = () => { setAmt(''); setTouched(false); };
+  const switchTab = (t: Tab) => { setTab(t); reset(); };
+  const switchAsset = (t: TokenSymbol) => { setAsset(assetOf(t)); setPath('instant'); reset(); };
 
-  const rate = stats?.rate ?? null;
-  const parsed = useMemo(() => parseVara(amt), [amt]);
-  const bal = tab === 'Stake' ? balances?.VARA ?? 0n : balances?.kVARA ?? 0n;
+  const { deposit, receipt, decimals } = ASSETS[asset];
+  const isVara = asset === 'VARA';
+  const fmt = (v: bigint, dp = 2) => formatUnits(v, decimals, dp);
+  const apyBps = stats ? (isVara ? stats.stakeApyBps : stats.vaultApyBps[asset]) : null;
+  // Rates keep accruing between stat refreshes; project them to the current second.
+  const rate = stats ? accrueRate(isVara ? stats.rate : stats.vaultSharePrice[asset], apyBps ?? 0n, now - stats.at) : null;
+  const parsed = useMemo(() => parseUnits(amt, decimals), [amt, decimals]);
+  const bal = tab === 'Stake' ? balances?.[deposit as 'VARA' | 'wUSDT' | 'wUSDC'] ?? 0n : balances?.[receipt as 'kVARA' | 'kUSDT' | 'kUSDC'] ?? 0n;
   const validation = validateAmount(amt, parsed, balances ? bal : null);
   const error = touched && !validation.ok && validation.reason !== 'empty' ? REASON[validation.reason] : undefined;
 
   const out = useMemo(() => {
     if (!rate || !parsed) return { main: 0n, fee: 0n };
-    if (tab === 'Stake') return { main: varaToKVara(parsed, rate), fee: 0n };
-    if (path === 'instant') { const r = instantUnstakeOut(parsed, rate); return { main: r.net, fee: r.fee }; }
-    return { main: nativeUnstakeOut(parsed, rate), fee: 0n };
-  }, [rate, parsed, tab, path]);
+    if (tab === 'Stake') return { main: assetsToShares(parsed, rate), fee: 0n };
+    const gross = sharesToAssets(parsed, rate);
+    if (path === 'instant' || !isVara) { const fee = (gross * INSTANT_UNSTAKE_FEE_BPS) / BPS; return { main: gross - fee, fee }; }
+    return { main: gross, fee: 0n };
+  }, [rate, parsed, tab, path, isVara]);
 
-  const price = stats?.varaPriceUsd ?? 0;
-  const usd = (v: bigint) => formatUsd(toNumber(v, VARA_DECIMALS) * price);
+  const price = isVara ? stats?.varaPriceUsd ?? 0 : 1;
+  const usd = (v: bigint) => formatUsd(toNumber(v, decimals) * price);
   const busy = tx.stage === 'broadcast';
 
   const act = async () => {
@@ -57,16 +76,21 @@ export function StakePage() {
     const a = parsed;
     let ok = false;
     if (tab === 'Stake') {
-      ok = await run('Stake', (addr) => adapter.stake(addr, a), { title: `Staked ${formatVara(a)} VARA`, detail: `You received ${formatVara(out.main)} kVARA at rate ${formatRate(rate)}.` });
+      ok = isVara
+        ? await run('Stake', (addr) => adapter.stake(addr, a), { title: `Staked ${fmt(a)} VARA`, detail: `You received ${fmt(out.main)} kVARA at rate ${formatRate(rate)}.` })
+        : await run(`Deposit ${deposit}`, (addr) => adapter.depositVault(addr, asset, a), { title: `Deposited ${fmt(a)} ${deposit}`, detail: `You received ${fmt(out.main)} ${receipt} at share price ${formatRate(rate)}.` });
+    } else if (!isVara) {
+      ok = await run(`Withdraw ${asset}`, (addr) => adapter.redeemVault(addr, asset, a), { title: `Withdrew ${fmt(out.main)} ${deposit}`, detail: '0.3% instant exit fee applied.' });
     } else if (path === 'instant') {
-      ok = await run('Instant unstake', (addr) => adapter.unstakeInstant(addr, a), { title: 'Unstaked instantly', detail: `${formatVara(out.main)} VARA received · 0.3% fee applied.` });
+      ok = await run('Instant unstake', (addr) => adapter.unstakeInstant(addr, a), { title: 'Unstaked instantly', detail: `${fmt(out.main)} VARA received · 0.3% fee applied.` });
     } else {
-      ok = await run('Native unbond', (addr) => adapter.unstakeNative(addr, a), { title: 'Unbond started', detail: `${formatVara(out.main)} VARA claimable in 7 days at full rate.` });
+      ok = await run('Native unbond', (addr) => adapter.unstakeNative(addr, a), { title: 'Unbond started', detail: `${fmt(out.main)} VARA claimable in 7 days at full rate.` });
     }
-    if (ok) { setAmt(''); setTouched(false); }
+    if (ok) reset();
   };
 
-  const label = !account ? 'Connect wallet' : tab === 'Stake' ? 'Stake' : path === 'instant' ? 'Unstake instantly' : 'Start unbond';
+  const label = !account ? 'Connect wallet' : tab === 'Stake' ? (isVara ? 'Stake' : `Deposit ${deposit}`) : !isVara ? 'Withdraw instantly' : path === 'instant' ? 'Unstake instantly' : 'Start unbond';
+  const pickable = tab === 'Stake' ? ORDER.map((a) => ASSETS[a].deposit) : ORDER.map((a) => ASSETS[a].receipt);
 
   return (
     <div className="ap-stake">
@@ -77,11 +101,11 @@ export function StakePage() {
           {account ? (
             balancesError ? <span style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--danger)' }}>{balancesError}</span> : (
               <span className={balances ? undefined : 'skeleton'} style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 14, minWidth: balances ? undefined : 140 }}>
-                {balances ? <>{formatVara(balances.VARA)} VARA <span style={{ color: 'var(--text-3)' }}>( {usd(balances.VARA)} )</span></> : '0.00'}
+                {balances ? <>{fmt(balances[deposit as 'VARA' | 'wUSDT' | 'wUSDC'])} {deposit} <span style={{ color: 'var(--text-3)' }}>( {usd(balances[deposit as 'VARA' | 'wUSDT' | 'wUSDC'])} )</span></> : '0.00'}
               </span>
             )
           ) : (
-            <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-3)' }}>— VARA</span>
+            <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text-3)' }}>— {deposit}</span>
           )}
         </div>
 
@@ -90,27 +114,32 @@ export function StakePage() {
           <div style={{ marginTop: 16 }}>
             <AmountField
               label={tab === 'Stake' ? 'You stake' : 'You unstake'}
-              token={tab === 'Stake' ? 'VARA' : 'kVARA'}
-              balance={balances ? formatVara(bal) : undefined}
+              token={tab === 'Stake' ? deposit : receipt}
+              tokens={pickable}
+              onToken={switchAsset}
+              balance={balances ? fmt(bal) : undefined}
               value={amt}
               onChange={(v) => { setAmt(v); setTouched(true); }}
-              onMax={balances ? () => { setAmt(formatVara(bal, VARA_DECIMALS).replace(/,/g, '').replace(/\.?0+$/, '')); setTouched(true); } : undefined}
-              fiat={parsed && rate ? `≈ ${usd(tab === 'Stake' ? parsed : nativeUnstakeOut(parsed, rate))}` : ''}
+              onMax={balances ? () => { setAmt(fmt(bal, decimals).replace(/,/g, '').replace(/\.?0+$/, '')); setTouched(true); } : undefined}
+              fiat={parsed && rate ? `≈ ${usd(tab === 'Stake' ? parsed : sharesToAssets(parsed, rate))}` : ''}
               error={error}
               disabled={busy}
             />
           </div>
-          {tab === 'Unstake' && (
+          {tab === 'Unstake' && isVara && (
             <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
               <ExitOption title="Instant" sub="~0.3% fee · now" active={path === 'instant'} onClick={() => setPath('instant')} />
               <ExitOption title="Native unbond" sub="free · 7 days" active={path === 'native'} onClick={() => setPath('native')} />
             </div>
           )}
+          {tab === 'Unstake' && !isVara && (
+            <p style={{ fontSize: 12.5, color: 'var(--text-3)', margin: '10px 2px 0', lineHeight: 1.5 }}>Stable vaults exit instantly with a 0.3% fee; there is no unbonding period.</p>
+          )}
           <div style={{ margin: '10px 0 14px' }}>
-            <IRow icon={<ChartPie size={14} strokeWidth={1.5} />} k="Position" v={balances ? `${formatVara(balances.kVARA)} kVARA` : account ? '…' : '—'} loading={!!account && !balances} />
-            <IRow icon={<Star size={14} strokeWidth={1.5} />} k="APY" v={stats ? bpsToPercent(stats.stakeApyBps) : '…'} accent loading={!stats} />
-            <IRow icon={<Coins size={14} strokeWidth={1.5} />} k="You receive" v={`${formatVara(out.main)} ${tab === 'Stake' ? 'kVARA' : 'VARA'}`} />
-            {tab === 'Unstake' && path === 'instant' && parsed ? <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-3)', textAlign: 'right', marginTop: -6 }}>fee {formatVara(out.fee, 4)} VARA</div> : null}
+            <IRow icon={<ChartPie size={14} strokeWidth={1.5} />} k="Position" v={balances ? `${fmt(balances[receipt as 'kVARA' | 'kUSDT' | 'kUSDC'])} ${receipt}` : account ? '…' : '—'} loading={!!account && !balances} />
+            <IRow icon={<Star size={14} strokeWidth={1.5} />} k="APY" v={apyBps !== null ? bpsToPercent(apyBps) : '…'} accent loading={!stats} />
+            <IRow icon={<Coins size={14} strokeWidth={1.5} />} k="You receive" v={`${fmt(out.main)} ${tab === 'Stake' ? receipt : deposit}`} />
+            {tab === 'Unstake' && out.fee > 0n && parsed ? <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-3)', textAlign: 'right', marginTop: -6 }}>fee {fmt(out.fee, 4)} {deposit}</div> : null}
           </div>
           <Button size="xl" block disabled={!!account && !validation.ok} loading={busy} onClick={act}>
             {busy ? 'Confirm in your wallet…' : label}
@@ -124,12 +153,12 @@ export function StakePage() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div className="ap-grid-2">
           <div style={{ borderRadius: 24, background: 'var(--grad-primary)', padding: '18px 18px 20px' }}>
-            <div className="eyebrow" style={{ color: 'rgba(255,255,255,.85)' }}>TVL</div>
+            <div className="eyebrow" style={{ color: 'rgba(255,255,255,.85)' }}>TVL · 3 vaults</div>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 27, color: '#fff', marginTop: 6 }}>{stats ? formatCompactUsd(stats.tvlUsd) : '…'}</div>
           </div>
           <Bento variant="app" pad={18}>
-            <Eyebrow>APY</Eyebrow>
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 27, marginTop: 6, color: 'var(--text-1)' }}>{stats ? bpsToPercent(stats.stakeApyBps) : '…'}</div>
+            <Eyebrow>{receipt} APY</Eyebrow>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 27, marginTop: 6, color: 'var(--text-1)' }}>{apyBps !== null ? bpsToPercent(apyBps) : '…'}</div>
           </Bento>
         </div>
         <Bento variant="app" pad={20}>
