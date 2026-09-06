@@ -1,4 +1,4 @@
-# Vaultera on Vara mainnet: spec
+# Vale Protocol on Vara mainnet: spec
 
 Status: decided 2026-09-06. Owner request: "liquid staking protocol on Vara deployed on Vara
 mainnet, 100% working and functional; for testing use USDC and USDT named demo tokens that a
@@ -7,7 +7,7 @@ user can deposit and get a 1:1 receipt token that provides yield, end to end."
 ## Goal
 
 Ship a working liquid staking style vault on Vara mainnet that a user can exercise end to end
-from the existing Vaultera app: get demo tokens, deposit, hold a transferable receipt token whose
+from the existing Vale Protocol app: get demo tokens, deposit, hold a transferable receipt token whose
 value grows, exit instantly (small fee) or through a timed unbond (no fee).
 
 Vara has no public testnet today, so the demo tokens and the protocol both live on mainnet.

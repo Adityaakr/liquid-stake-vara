@@ -1,4 +1,4 @@
-# Vaultera on Vara mainnet: test report
+# Vale Protocol on Vara mainnet: test report
 
 Companion to the spec and architecture notes of the same date. Everything below was run on
 2026-09-06 with `sails-rs 1.0.1`, `gtest 1.10.1`, and the `gear v1.10.0` node binary.

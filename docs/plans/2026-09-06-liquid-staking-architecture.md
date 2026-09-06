@@ -1,4 +1,4 @@
-# Vaultera on Vara mainnet: architecture
+# Vale Protocol on Vara mainnet: architecture
 
 Companion to `2026-09-06-liquid-staking-spec.md`.
 
