@@ -3,7 +3,7 @@ import type { VaultAsset } from '@/domain/protocol';
 import { MockAdapter } from './mockAdapter';
 import { GearAdapter } from './gearAdapter';
 import { DEFAULT_NETWORK, NETWORKS } from './networks';
-import { ChainError, type Account, type Balances, type NetworkId, type ProtocolStats, type StakingAdapter, type TxResult, type TxStage, type UnbondEntry } from './types';
+import { ChainError, type Account, type Balances, type FaucetInfo, type NetworkId, type ProtocolStats, type StakingAdapter, type TxResult, type TxStage, type UnbondEntry } from './types';
 import { DEMO_ACCOUNT, connectWallet, recallAccount, rememberAccount } from './wallet';
 
 export type ToastMsg = { id: number; tone: 'ok' | 'warn' | 'danger' | 'info'; title: string; detail?: string };
@@ -26,9 +26,10 @@ type Store = {
   balances: Balances | null;
   balancesError: string | null;
   unbonding: UnbondEntry[];
+  faucet: Record<VaultAsset, FaucetInfo> | null;
   refresh: () => Promise<void>;
   tx: { stage: TxStage; label?: string; error?: string; result?: TxResult };
-  run: (label: string, fn: (address: string) => Promise<TxResult>, onDone?: { title: string; detail?: string }) => Promise<boolean>;
+  run: (label: string, fn: (address: string) => Promise<TxResult>, onDone?: { title: string; detail?: string } | ((r: TxResult) => { title: string; detail?: string })) => Promise<boolean>;
   toasts: ToastMsg[];
   notify: (t: Omit<ToastMsg, 'id'>) => void;
   dismiss: (id: number) => void;
@@ -62,6 +63,7 @@ export function StoreProvider({ children, adapter: injected }: { children: React
   const [balances, setBalances] = useState<Balances | null>(null);
   const [balancesError, setBalancesError] = useState<string | null>(null);
   const [unbonding, setUnbonding] = useState<UnbondEntry[]>([]);
+  const [faucet, setFaucet] = useState<Record<VaultAsset, FaucetInfo> | null>(null);
   const [tx, setTx] = useState<Store['tx']>({ stage: 'idle' });
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const seq = useRef(0);
@@ -72,7 +74,7 @@ export function StoreProvider({ children, adapter: injected }: { children: React
   const notify = useCallback((t: Omit<ToastMsg, 'id'>) => {
     const id = ++seq.current;
     setToasts((ts) => [...ts.slice(-2), { ...t, id }]);
-    setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 5200);
+    setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 6500);
   }, []);
   const dismiss = useCallback((id: number) => setToasts((ts) => ts.filter((x) => x.id !== id)), []);
 
@@ -83,11 +85,11 @@ export function StoreProvider({ children, adapter: injected }: { children: React
   const refresh = useCallback(async () => {
     const mine = ++refreshSeq.current;
     await loadStats();
-    if (!account) { setBalances(null); setUnbonding([]); return; }
+    if (!account) { setBalances(null); setUnbonding([]); setFaucet(null); return; }
     try {
-      const [b, u] = await Promise.all([adapter.getBalances(account.address), adapter.getUnbonding(account.address)]);
+      const [b, u, f] = await Promise.all([adapter.getBalances(account.address), adapter.getUnbonding(account.address), adapter.getFaucet(account.address)]);
       if (mine !== refreshSeq.current) return; // a newer refresh (other account or network) owns the state now
-      setBalances(b); setUnbonding(u); setBalancesError(null);
+      setBalances(b); setUnbonding(u); setFaucet(f); setBalancesError(null);
     } catch (e) { if (mine === refreshSeq.current) setBalancesError(errorMessage(e)); }
   }, [adapter, account, loadStats]);
 
@@ -122,7 +124,7 @@ export function StoreProvider({ children, adapter: injected }: { children: React
     notify({ tone: 'info', title: 'Demo account connected', detail: 'Balances are simulated. Nothing is sent on chain.' });
   }, [notify]);
 
-  const disconnect = useCallback(() => { setAccount(null); setAccounts([]); rememberAccount(null); setBalances(null); setUnbonding([]); }, []);
+  const disconnect = useCallback(() => { setAccount(null); setAccounts([]); rememberAccount(null); setBalances(null); setUnbonding([]); setFaucet(null); }, []);
   const selectAccount = useCallback((a: Account) => { setAccount(a); rememberAccount(a); }, []);
   const setExternalAccount = useCallback((a: Account | null) => {
     setAccount((prev) => {
@@ -132,7 +134,7 @@ export function StoreProvider({ children, adapter: injected }: { children: React
     setAccounts(a ? [a] : []);
     if (a) rememberAccount(a); else rememberAccount(null);
   }, []);
-  const setNetwork = useCallback((n: NetworkId) => { setNetworkState(n); setStats(null); setStatsError(null); setBalances(null); setBalancesError(null); setUnbonding([]); }, []);
+  const setNetwork = useCallback((n: NetworkId) => { setNetworkState(n); setStats(null); setStatsError(null); setBalances(null); setBalancesError(null); setUnbonding([]); setFaucet(null); }, []);
 
   const run = useCallback<Store['run']>(async (label, fn, onDone) => {
     if (!account || inFlight.current) return false;
@@ -144,7 +146,7 @@ export function StoreProvider({ children, adapter: injected }: { children: React
       const result = await fn(account.address);
       setTx({ stage: 'finalized', label, result });
       await refresh();
-      if (onDone) notify({ tone: 'ok', ...onDone });
+      if (onDone) notify({ tone: 'ok', ...(typeof onDone === 'function' ? onDone(result) : onDone) });
       settle(1500);
       return true;
     } catch (e) {
@@ -156,7 +158,7 @@ export function StoreProvider({ children, adapter: injected }: { children: React
     } finally { inFlight.current = false; }
   }, [account, refresh, notify]);
 
-  const value: Store = { adapter, network, setNetwork, stats, statsError, account, accounts, selectAccount, connecting, connect, connectDemo, disconnect, setExternalAccount, balances, balancesError, unbonding, refresh, tx, run, toasts, notify, dismiss };
+  const value: Store = { adapter, network, setNetwork, stats, statsError, account, accounts, selectAccount, connecting, connect, connectDemo, disconnect, setExternalAccount, balances, balancesError, unbonding, faucet, refresh, tx, run, toasts, notify, dismiss };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

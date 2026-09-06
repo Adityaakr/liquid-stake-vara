@@ -37,18 +37,19 @@ describe('MockAdapter', () => {
     const b = await m.getBalances(A);
     await m.unstakeNative(A, b.kVARA);
     const [u] = await m.getUnbonding(A);
+    expect(u.asset).toBe('VARA');
     expect(u.claimableAt - u.startedAt).toBe(7 * 86_400_000);
-    await expect(m.claimUnbonded(A, u.id)).rejects.toThrow(/not ended/);
+    await expect(m.claimUnbond(A, 'VARA', u.id)).rejects.toThrow(/not ended/);
     m._debugFastForward(A);
     const before = (await m.getBalances(A)).VARA;
-    await m.claimUnbonded(A, u.id);
-    expect((await m.getBalances(A)).VARA - before).toBe(u.amountVara);
+    await m.claimUnbond(A, 'VARA', u.id);
+    expect((await m.getBalances(A)).VARA - before).toBe(u.amount);
     expect(await m.getUnbonding(A)).toHaveLength(0);
   });
   it('vault deposit mints shares at the share price', async () => {
     await m.depositVault(A, 'USDT', 100n * ONE_STABLE);
     const b = await m.getBalances(A);
-    expect(b.wUSDT).toBe(400n * ONE_STABLE);
+    expect(b.USDT).toBe(400n * ONE_STABLE);
     expect(b.kUSDT).toBeGreaterThan(0n);
     expect(b.kUSDT).toBeLessThan(100n * ONE_STABLE);
   });
@@ -96,7 +97,7 @@ describe('MockAdapter accrual', () => {
     t = T0 + 365 * 24 * 3600 * 1000;
     const after = await clock.getStats();
     expect(after.rate).toBe(before.rate + (before.rate * 1420n) / 10_000n);
-    expect(after.vaultSharePrice.USDT).toBe(before.vaultSharePrice.USDT + (before.vaultSharePrice.USDT * 840n) / 10_000n);
+    expect(after.vaults.USDT.rate).toBe(before.vaults.USDT.rate + (before.vaults.USDT.rate * 840n) / 10_000n);
     expect(after.at).toBe(t);
   });
   it('tracks the principal behind receipts so earnings can be shown', async () => {
@@ -105,12 +106,12 @@ describe('MockAdapter accrual', () => {
     await clock.stake(A, 100n * ONE_VARA);
     await clock.depositVault(A, 'USDT', 50n * ONE_STABLE);
     let b = await clock.getBalances(A);
-    expect(b.principal.VARA).toBe(100n * ONE_VARA);
-    expect(b.principal.USDT).toBe(50n * ONE_STABLE);
+    expect(b.principal!.VARA).toBe(100n * ONE_VARA);
+    expect(b.principal!.USDT).toBe(50n * ONE_STABLE);
     t = T0 + 30 * 24 * 3600 * 1000;
     await clock.unstakeInstant(A, b.kVARA / 2n);
     b = await clock.getBalances(A);
-    const diff = b.principal.VARA - 50n * ONE_VARA;
+    const diff = b.principal!.VARA - 50n * ONE_VARA;
     expect(diff >= -1n && diff <= 1n).toBe(true); // proportional reduction, integer rounding
   });
 });
@@ -119,11 +120,11 @@ describe('MockAdapter vault exit', () => {
   it('instant vault exit pays the asset minus the 0.3% fee', async () => {
     await m.depositVault(A, 'USDT', 100n * ONE_STABLE);
     const b = await m.getBalances(A);
-    const { vaultSharePrice } = await m.getStats();
+    const { vaults } = await m.getStats();
     await m.redeemVault(A, 'USDT', b.kUSDT);
     const after = await m.getBalances(A);
-    const gross = sharesToAssets(b.kUSDT, vaultSharePrice.USDT);
-    expect(after.wUSDT - b.wUSDT).toBe(gross - (gross * 30n) / 10_000n);
+    const gross = sharesToAssets(b.kUSDT, vaults.USDT.rate);
+    expect(after.USDT - b.USDT).toBe(gross - (gross * 30n) / 10_000n);
     expect(after.kUSDT).toBe(0n);
     await expect(m.redeemVault(A, 'USDT', 1n)).rejects.toThrow(/Insufficient kUSDT/);
   });

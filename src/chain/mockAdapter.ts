@@ -1,13 +1,13 @@
-import { BPS, INSTANT_UNSTAKE_FEE_BPS, ONE_STABLE, ONE_VARA, RATE_SCALE, UNBONDING_MS, type VaultAsset } from '@/domain/protocol';
+import { BPS, INSTANT_UNSTAKE_FEE_BPS, ONE_STABLE, ONE_VARA, RATE_SCALE, UNBONDING_MS, VAULT_ASSETS, type VaultAsset } from '@/domain/protocol';
 import { accrueRate, assetsToShares, instantUnstakeOut, nativeUnstakeOut, sharesToAssets, varaToKVara } from '@/domain/math';
 import { parseRate } from '@/domain/format';
-import { ChainError, type Balances, type DepositAsset, type NetworkId, type ProtocolStats, type StakingAdapter, type TxResult, type UnbondEntry } from './types';
+import { ChainError, type Balances, type DepositAsset, type FaucetInfo, type NetworkId, type ProtocolStats, type StakingAdapter, type TxResult, type UnbondEntry, type VaultStats } from './types';
 
-type StoredUnbond = Omit<UnbondEntry, 'amountVara'> & { amountVara: string };
+type StoredUnbond = Omit<UnbondEntry, 'amount'> & { amount: string };
 type StoredBalances = Record<Exclude<keyof Balances, 'principal'>, string> & { principal?: Record<DepositAsset, string> };
-type Persisted = { balances: Record<string, StoredBalances>; unbonding: Record<string, StoredUnbond[]> };
+type Persisted = { balances: Record<string, StoredBalances>; unbonding: Record<string, StoredUnbond[]>; faucet: Record<string, Partial<Record<VaultAsset, number>>> };
 
-const KEY = 'vale.mock.v2';
+const KEY = 'vale.mock.v3';
 const ERA_MS = 12 * 60 * 60 * 1000;
 
 /**
@@ -26,13 +26,15 @@ const VAULT_BASE_PRICE: Record<VaultAsset, bigint> = { USDT: parseRate('1.0261')
 const VAULT_TVL: Record<VaultAsset, number> = { USDT: 577_000, USDC: 230_000 };
 const STAKED_VARA = 918_270_000n * ONE_VARA;
 const VARA_PRICE_USD = 0.0004258;
-const VAULT_UTIL: Record<VaultAsset, bigint> = { USDT: 7200n, USDC: 6400n };
+const VAULT_UNBOND_SECS = 7 * 86_400;
+const FAUCET_AMOUNT = 1_000n * ONE_STABLE;
+const FAUCET_COOLDOWN_SECS = 24 * 3600;
 
 const DEFAULT_BALANCES: Balances = {
   VARA: 1240n * ONE_VARA + (52n * ONE_VARA) / 100n,
   kVARA: 0n,
-  wUSDT: 500n * ONE_STABLE,
-  wUSDC: 250n * ONE_STABLE,
+  USDT: 500n * ONE_STABLE,
+  USDC: 250n * ONE_STABLE,
   kUSDT: 0n,
   kUSDC: 0n,
   principal: { VARA: 0n, USDT: 0n, USDC: 0n },
@@ -44,9 +46,9 @@ const hash = () => '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32)),
 function load(): Persisted {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return JSON.parse(raw) as Persisted;
+    if (raw) { const p = JSON.parse(raw) as Persisted; return { balances: p.balances ?? {}, unbonding: p.unbonding ?? {}, faucet: p.faucet ?? {} }; }
   } catch { /* fresh state */ }
-  return { balances: {}, unbonding: {} };
+  return { balances: {}, unbonding: {}, faucet: {} };
 }
 
 /**
@@ -57,6 +59,8 @@ function load(): Persisted {
 export class MockAdapter implements StakingAdapter {
   readonly kind = 'mock' as const;
   readonly simulated = true;
+  readonly deployed = true;
+  readonly stakingLive = true;
   private state: Persisted;
   private listeners = new Set<() => void>();
   private latency: number;
@@ -65,7 +69,7 @@ export class MockAdapter implements StakingAdapter {
   constructor(readonly network: NetworkId = 'mainnet', opts: { latencyMs?: number; storage?: boolean; now?: () => number } = {}) {
     this.latency = opts.latencyMs ?? 900;
     this.now = opts.now ?? (() => Date.now());
-    this.state = opts.storage === false ? { balances: {}, unbonding: {} } : load();
+    this.state = opts.storage === false ? { balances: {}, unbonding: {}, faucet: {} } : load();
     this.persist = opts.storage === false ? () => {} : this.persist;
   }
 
@@ -94,6 +98,23 @@ export class MockAdapter implements StakingAdapter {
     return { era, endsAt };
   }
 
+  private vaultStats(asset: VaultAsset, now: number): VaultStats {
+    const rate = this.sharePriceAt(asset, now);
+    const totalAssets = BigInt(Math.round(VAULT_TVL[asset])) * ONE_STABLE;
+    return {
+      rate,
+      apyBps: VAULT_APY[asset],
+      instantFeeBps: INSTANT_UNSTAKE_FEE_BPS,
+      unbondSecs: VAULT_UNBOND_SECS,
+      minDeposit: 1_000n,
+      totalShares: assetsToShares(totalAssets, rate),
+      totalAssets,
+      holdings: totalAssets,
+      tvlUsd: VAULT_TVL[asset],
+      paused: false,
+    };
+  }
+
   async getStats(): Promise<ProtocolStats> {
     const now = this.now();
     const { era, endsAt } = this.currentEra(now);
@@ -102,10 +123,7 @@ export class MockAdapter implements StakingAdapter {
     return {
       rate,
       stakeApyBps: APY_BPS,
-      vaultApyBps: { ...VAULT_APY },
-      vaultSharePrice: { USDT: this.sharePriceAt('USDT', now), USDC: this.sharePriceAt('USDC', now) },
-      vaultTvlUsd: { ...VAULT_TVL },
-      vaultUtilizationBps: { ...VAULT_UTIL },
+      vaults: { USDT: this.vaultStats('USDT', now), USDC: this.vaultStats('USDC', now) },
       tvlUsd: (Number(STAKED_VARA) / Number(ONE_VARA)) * VARA_PRICE_USD + VAULT_TVL.USDT + VAULT_TVL.USDC,
       totalStakedVara: STAKED_VARA,
       bufferBps: 720n,
@@ -117,17 +135,17 @@ export class MockAdapter implements StakingAdapter {
     };
   }
 
-  private bal(address: string): Balances {
+  private bal(address: string): Balances & { principal: Record<DepositAsset, bigint> } {
     const s = this.state.balances[address];
-    if (!s) return { ...DEFAULT_BALANCES, principal: { ...DEFAULT_BALANCES.principal } };
+    if (!s) return { ...DEFAULT_BALANCES, principal: { ...DEFAULT_BALANCES.principal! } };
     const { principal, ...rest } = s;
     const out = Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, BigInt(v)])) as Omit<Balances, 'principal'>;
     return { ...out, principal: { VARA: BigInt(principal?.VARA ?? '0'), USDT: BigInt(principal?.USDT ?? '0'), USDC: BigInt(principal?.USDC ?? '0') } };
   }
-  private setBal(address: string, b: Balances) {
+  private setBal(address: string, b: Balances & { principal: Record<DepositAsset, bigint> }) {
     const { principal, ...rest } = b;
     this.state.balances[address] = {
-      ...(Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, v.toString()])) as Record<Exclude<keyof Balances, 'principal'>, string>),
+      ...(Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, (v as bigint).toString()])) as Record<Exclude<keyof Balances, 'principal'>, string>),
       principal: { VARA: principal.VARA.toString(), USDT: principal.USDT.toString(), USDC: principal.USDC.toString() },
     };
     this.persist();
@@ -135,9 +153,9 @@ export class MockAdapter implements StakingAdapter {
   }
 
   /** Reduce the tracked principal in proportion to the receipts leaving the position. */
-  private principalAfter(b: Balances, asset: DepositAsset, receiptsOut: bigint, receiptsBefore: bigint): bigint {
+  private principalAfter(principal: bigint, receiptsOut: bigint, receiptsBefore: bigint): bigint {
     if (receiptsBefore <= 0n || receiptsOut >= receiptsBefore) return 0n;
-    return b.principal[asset] - (b.principal[asset] * receiptsOut) / receiptsBefore;
+    return principal - (principal * receiptsOut) / receiptsBefore;
   }
 
   async getBalances(address: string): Promise<Balances> {
@@ -146,7 +164,12 @@ export class MockAdapter implements StakingAdapter {
   }
 
   async getUnbonding(address: string): Promise<UnbondEntry[]> {
-    return (this.state.unbonding[address] ?? []).map((u) => ({ ...u, amountVara: BigInt(u.amountVara) }));
+    return (this.state.unbonding[address] ?? []).map((u) => ({ ...u, amount: BigInt(u.amount) }));
+  }
+
+  async getFaucet(address: string): Promise<Record<VaultAsset, FaucetInfo>> {
+    const last = this.state.faucet[address] ?? {};
+    return Object.fromEntries(VAULT_ASSETS.map((a) => [a, { amount: FAUCET_AMOUNT, cooldownSecs: FAUCET_COOLDOWN_SECS, nextClaimAt: last[a] ? last[a]! + FAUCET_COOLDOWN_SECS * 1000 : 0 }])) as Record<VaultAsset, FaucetInfo>;
   }
 
   /** Adapter-side guard so two overlapping writes for one address serialize instead of racing. */
@@ -161,6 +184,12 @@ export class MockAdapter implements StakingAdapter {
   private async tx(): Promise<TxResult> {
     await wait(this.latency);
     return { hash: hash(), blockNumber: 12_000_000 + Math.floor(this.elapsedMs() / 3000) };
+  }
+
+  private pushUnbond(address: string, u: StoredUnbond) {
+    const list = this.state.unbonding[address] ?? [];
+    list.push(u);
+    this.state.unbonding[address] = list;
   }
 
   stake(address: string, vara: bigint): Promise<TxResult> {
@@ -181,7 +210,7 @@ export class MockAdapter implements StakingAdapter {
       const { net } = instantUnstakeOut(kvara, this.rateAt());
       const r = await this.tx();
       const b = this.bal(address);
-      this.setBal(address, { ...b, kVARA: b.kVARA - kvara, VARA: b.VARA + net, principal: { ...b.principal, VARA: this.principalAfter(b, 'VARA', kvara, b.kVARA) } });
+      this.setBal(address, { ...b, kVARA: b.kVARA - kvara, VARA: b.VARA + net, principal: { ...b.principal, VARA: this.principalAfter(b.principal.VARA, kvara, b.kVARA) } });
       return r;
     });
   }
@@ -192,53 +221,76 @@ export class MockAdapter implements StakingAdapter {
       const out = nativeUnstakeOut(kvara, this.rateAt());
       const r = await this.tx();
       const now = this.now();
-      const list = this.state.unbonding[address] ?? [];
-      list.push({ id: r.hash.slice(0, 10), amountVara: out.toString(), startedAt: now, claimableAt: now + UNBONDING_MS });
-      this.state.unbonding[address] = list;
+      this.pushUnbond(address, { id: r.hash.slice(0, 10), asset: 'VARA', amount: out.toString(), startedAt: now, claimableAt: now + UNBONDING_MS });
       const b = this.bal(address);
-      this.setBal(address, { ...b, kVARA: b.kVARA - kvara, principal: { ...b.principal, VARA: this.principalAfter(b, 'VARA', kvara, b.kVARA) } });
+      this.setBal(address, { ...b, kVARA: b.kVARA - kvara, principal: { ...b.principal, VARA: this.principalAfter(b.principal.VARA, kvara, b.kVARA) } });
       return r;
     });
   }
 
-  claimUnbonded(address: string, id: string): Promise<TxResult> {
+  claimUnbond(address: string, asset: DepositAsset, id: string): Promise<TxResult> {
     return this.locked(address, async () => {
       const list = this.state.unbonding[address] ?? [];
-      const entry = list.find((u) => u.id === id);
+      const entry = list.find((u) => u.id === id && u.asset === asset);
       if (!entry) throw new ChainError('Unbond entry not found', 'UNKNOWN');
       if (this.now() < entry.claimableAt) throw new ChainError('Unbonding period has not ended', 'UNKNOWN');
       const r = await this.tx();
-      this.state.unbonding[address] = (this.state.unbonding[address] ?? []).filter((u) => u.id !== id);
+      this.state.unbonding[address] = list.filter((u) => u.id !== id);
       const b = this.bal(address);
-      this.setBal(address, { ...b, VARA: b.VARA + BigInt(entry.amountVara) });
+      this.setBal(address, { ...b, [asset]: b[asset] + BigInt(entry.amount) });
       return r;
     });
   }
 
-  depositVault(address: string, asset: VaultAsset, amount: bigint): Promise<TxResult> {
+  claimFaucet(address: string, asset: VaultAsset): Promise<TxResult> {
     return this.locked(address, async () => {
-      const dep = `w${asset}` as const;
+      const f = (await this.getFaucet(address))[asset];
+      if (this.now() < f.nextClaimAt) throw new ChainError('The faucet is cooling down for this address', 'PROGRAM');
+      const r = await this.tx();
+      this.state.faucet[address] = { ...(this.state.faucet[address] ?? {}), [asset]: this.now() };
+      const b = this.bal(address);
+      this.setBal(address, { ...b, [asset]: b[asset] + f.amount });
+      return r;
+    });
+  }
+
+  depositVault(address: string, asset: VaultAsset, amount: bigint): Promise<TxResult & { shares?: bigint }> {
+    return this.locked(address, async () => {
       const rec = `k${asset}` as const;
-      if (amount <= 0n || amount > this.bal(address)[dep]) throw new ChainError(`Insufficient ${dep} balance`, 'INSUFFICIENT');
-      const price = this.sharePriceAt(asset);
+      if (amount <= 0n || amount > this.bal(address)[asset]) throw new ChainError(`Insufficient ${asset} balance`, 'INSUFFICIENT');
+      const shares = assetsToShares(amount, this.sharePriceAt(asset));
       const r = await this.tx();
       const b = this.bal(address);
-      this.setBal(address, { ...b, [dep]: b[dep] - amount, [rec]: b[rec] + assetsToShares(amount, price), principal: { ...b.principal, [asset]: b.principal[asset] + amount } });
-      return r;
+      this.setBal(address, { ...b, [asset]: b[asset] - amount, [rec]: b[rec] + shares, principal: { ...b.principal, [asset]: b.principal[asset] + amount } });
+      return { ...r, shares };
     });
   }
 
-  redeemVault(address: string, asset: VaultAsset, shares: bigint): Promise<TxResult> {
+  redeemVault(address: string, asset: VaultAsset, shares: bigint): Promise<TxResult & { net?: bigint; fee?: bigint }> {
     return this.locked(address, async () => {
-      const dep = `w${asset}` as const;
       const rec = `k${asset}` as const;
       if (shares <= 0n || shares > this.bal(address)[rec]) throw new ChainError(`Insufficient ${rec} balance`, 'INSUFFICIENT');
       const gross = sharesToAssets(shares, this.sharePriceAt(asset));
-      const net = gross - (gross * INSTANT_UNSTAKE_FEE_BPS) / BPS;
+      const fee = (gross * INSTANT_UNSTAKE_FEE_BPS) / BPS;
       const r = await this.tx();
       const b = this.bal(address);
-      this.setBal(address, { ...b, [rec]: b[rec] - shares, [dep]: b[dep] + net, principal: { ...b.principal, [asset]: this.principalAfter(b, asset, shares, b[rec]) } });
-      return r;
+      this.setBal(address, { ...b, [rec]: b[rec] - shares, [asset]: b[asset] + gross - fee, principal: { ...b.principal, [asset]: this.principalAfter(b.principal[asset], shares, b[rec]) } });
+      return { ...r, net: gross - fee, fee };
+    });
+  }
+
+  unbondVault(address: string, asset: VaultAsset, shares: bigint): Promise<TxResult & { amount?: bigint; claimableAt?: number }> {
+    return this.locked(address, async () => {
+      const rec = `k${asset}` as const;
+      if (shares <= 0n || shares > this.bal(address)[rec]) throw new ChainError(`Insufficient ${rec} balance`, 'INSUFFICIENT');
+      const assets = sharesToAssets(shares, this.sharePriceAt(asset));
+      const r = await this.tx();
+      const now = this.now();
+      const claimableAt = now + VAULT_UNBOND_SECS * 1000;
+      this.pushUnbond(address, { id: r.hash.slice(0, 10), asset, amount: assets.toString(), startedAt: now, claimableAt });
+      const b = this.bal(address);
+      this.setBal(address, { ...b, [rec]: b[rec] - shares, principal: { ...b.principal, [asset]: this.principalAfter(b.principal[asset], shares, b[rec]) } });
+      return { ...r, amount: assets, claimableAt };
     });
   }
 
@@ -257,4 +309,4 @@ export class MockAdapter implements StakingAdapter {
   }
 }
 
-export { RATE_SCALE, BPS };
+export { RATE_SCALE };

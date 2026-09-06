@@ -1,10 +1,13 @@
 import type { NetworkId } from './types';
 
-/** Vale Protocol runs on Vara mainnet. The RPC endpoint is configurable through VITE_VARA_RPC. */
+/** Vite injects `import.meta.env`; Node scripts (deploy, smoke) run without it. */
+const env: Record<string, string | undefined> = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+
+/** Vaultera runs on Vara mainnet. The RPC endpoint is configurable through VITE_VARA_RPC. */
 export const NETWORKS: Record<NetworkId, { label: string; rpc: string; ss58: number; explorer: string }> = {
   mainnet: {
-    label: 'Vara mainnet',
-    rpc: import.meta.env.VITE_VARA_RPC ?? 'wss://rpc.vara.network',
+    label: /127\.0\.0\.1|localhost/.test(env.VITE_VARA_RPC ?? '') ? 'Local node' : 'Vara mainnet',
+    rpc: env.VITE_VARA_RPC ?? 'wss://rpc.vara.network',
     ss58: 137,
     explorer: 'https://vara.subscan.io',
   },
