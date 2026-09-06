@@ -48,3 +48,6 @@
 .ap-demo:hover{border-style:solid}
 .ap-demo-top{display:none;width:auto;margin:0;padding:8px 12px}
 @media (max-width:1040px){.ap-demo-top{display:inline-block}}
+.ap-faucet{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:10px;padding:10px 14px;border:1px dashed var(--accent-line);border-radius:14px;background:var(--accent-soft);color:var(--fx-indigo);font-family:var(--font-body);font-size:13px;font-weight:500;cursor:pointer;transition:all var(--dur-1) var(--ease-out)}
+.ap-faucet:hover:not(:disabled){border-style:solid}
+.ap-faucet:disabled{cursor:default;color:var(--text-3);border-color:var(--fx-mist);background:#fff}

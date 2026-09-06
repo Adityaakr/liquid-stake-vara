@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
-import { ArrowLeft, BookOpen, Droplets, ShieldCheck, Vault, Wallet } from 'lucide-react';
+import { ArrowLeft, BookOpen, Droplets, Settings, ShieldCheck, Vault, Wallet } from 'lucide-react';
 import './app.css';
 import { Badge, Bento, Button, Toast } from '@/ui';
 import { useStore } from '@/chain/store';
@@ -10,7 +10,7 @@ import { useNow } from './bits';
 import { WalletDialog } from './WalletDialog';
 import { Wordmark } from '@/landing/Nav';
 
-const TITLES: Record<string, string> = { '/app': 'Stake', '/app/vaults': 'Stable vaults', '/app/portfolio': 'Portfolio' };
+const TITLES: Record<string, string> = { '/app': 'Stake', '/app/vaults': 'Pools', '/app/portfolio': 'Portfolio', '/app/settings': 'Settings' };
 
 function GlowBar({ pct, height = 6 }: { pct: number; height?: number }) {
   return (
@@ -32,6 +32,7 @@ function useEraProgress() {
 function NetworkCard() {
   const { stats, statsError, network, adapter, account, connectDemo, disconnect } = useStore();
   const { pct, left } = useEraProgress();
+  const onChain = adapter.kind === 'gear';
   return (
     <Bento variant="app" pad={14}>
       {adapter.simulated && !account && (
@@ -43,12 +44,21 @@ function NetworkCard() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text-1)', fontWeight: 500 }}>
         {NETWORKS[network].label}
         {adapter.simulated && <Badge size="sm" tone="warn" style={{ marginLeft: 'auto' }}>simulation</Badge>}
+        {onChain && !adapter.deployed && <Badge size="sm" tone="warn" style={{ marginLeft: 'auto' }}>not configured</Badge>}
       </div>
-      <div style={{ margin: '10px 0 6px' }}><GlowBar pct={pct} height={5} /></div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-3)' }}>
-        <span>era {stats ? stats.era.toLocaleString('en-US') : '—'}</span><span>ends {left}</span>
-      </div>
-      {statsError && <div title={statsError} style={{ marginTop: 8, fontSize: 11, color: 'var(--danger)' }}>stats unavailable</div>}
+      {onChain ? (
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-3)', marginTop: 10 }}>
+          <span>block {stats?.blockNumber ? stats.blockNumber.toLocaleString('en-US') : '—'}</span><span>{stats ? 'live' : 'connecting…'}</span>
+        </div>
+      ) : (
+        <>
+          <div style={{ margin: '10px 0 6px' }}><GlowBar pct={pct} height={5} /></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--text-3)' }}>
+            <span>era {stats ? stats.era.toLocaleString('en-US') : '—'}</span><span>ends {left}</span>
+          </div>
+        </>
+      )}
+      {statsError && <div title={statsError} style={{ marginTop: 8, fontSize: 11, color: 'var(--danger)' }}>node unreachable</div>}
     </Bento>
   );
 }
@@ -57,6 +67,7 @@ const NAV = [
   { to: '/app', label: 'Stake', icon: Droplets, end: true },
   { to: '/app/vaults', label: 'Vaults', icon: Vault },
   { to: '/app/portfolio', label: 'Portfolio', icon: Wallet },
+  { to: '/app/settings', label: 'Settings', icon: Settings },
 ];
 
 function Sidebar() {
@@ -91,9 +102,15 @@ function TopBar({ onWallet }: { onWallet: () => void }) {
       <div>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 19, letterSpacing: 'var(--ls-heading)', lineHeight: 1.2 }}>{title}</div>
       </div>
-      <span className="ap-pill ap-rate" style={{ marginLeft: 'auto' }}>
-        1 kVARA = <span style={{ color: 'var(--fx-indigo)', fontWeight: 600 }} className={stats ? undefined : 'skeleton'}>{stats ? formatRate(stats.rate) : '0.0000'}</span> VARA
-      </span>
+      {adapter.stakingLive ? (
+        <span className="ap-pill ap-rate" style={{ marginLeft: 'auto' }}>
+          1 kVARA = <span style={{ color: 'var(--fx-indigo)', fontWeight: 600 }} className={stats ? undefined : 'skeleton'}>{stats ? formatRate(stats.rate) : '0.0000'}</span> VARA
+        </span>
+      ) : (
+        <span className="ap-pill ap-rate" style={{ marginLeft: 'auto' }}>
+          1 kUSDC = <span style={{ color: 'var(--fx-indigo)', fontWeight: 600 }} className={stats ? undefined : 'skeleton'}>{stats ? formatRate(stats.vaults.USDC.rate, 6) : '0.000000'}</span> USDC
+        </span>
+      )}
       {!account && adapter.simulated && <button type="button" className="ap-demo ap-demo-top" onClick={connectDemo}>Demo</button>}
       {account ? (
         <button type="button" onClick={onWallet} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', marginLeft: stats ? 0 : 'auto' }} aria-label="Account">

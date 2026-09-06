@@ -8,6 +8,7 @@ import { AppLayout } from '@/app/AppLayout';
 import { StakePage } from '@/app/StakePage';
 import { VaultsPage } from '@/app/VaultsPage';
 import { PortfolioPage } from '@/app/PortfolioPage';
+import { SettingsPage } from '@/app/SettingsPage';
 
 function Root() {
   return (
@@ -61,6 +62,7 @@ export const routes = [
           { index: true, element: <StakePage /> },
           { path: 'vaults', element: <VaultsPage /> },
           { path: 'portfolio', element: <PortfolioPage /> },
+          { path: 'settings', element: <SettingsPage /> },
         ],
       },
       { path: '*', element: <NotFound /> },

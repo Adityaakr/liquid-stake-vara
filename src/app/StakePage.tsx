@@ -16,11 +16,10 @@ type Path = 'instant' | 'native';
 /** Everything the stake box needs per asset. Receipts are always k-prefixed. */
 const ASSETS: Record<DepositAsset, { deposit: TokenSymbol; receipt: TokenSymbol; decimals: number }> = {
   VARA: { deposit: 'VARA', receipt: 'kVARA', decimals: VARA_DECIMALS },
-  USDT: { deposit: 'wUSDT', receipt: 'kUSDT', decimals: STABLE_DECIMALS },
-  USDC: { deposit: 'wUSDC', receipt: 'kUSDC', decimals: STABLE_DECIMALS },
+  USDT: { deposit: 'USDT', receipt: 'kUSDT', decimals: STABLE_DECIMALS },
+  USDC: { deposit: 'USDC', receipt: 'kUSDC', decimals: STABLE_DECIMALS },
 };
-const ORDER: DepositAsset[] = ['VARA', 'USDT', 'USDC'];
-const assetOf = (t: TokenSymbol): DepositAsset => (t.replace(/^[wk]/, '') as DepositAsset);
+const assetOf = (t: TokenSymbol): DepositAsset => (t.replace(/^k/, '') as DepositAsset);
 
 function ExitOption({ title, sub, active, onClick }: { title: string; sub: string; active: boolean; onClick: () => void }) {
   return (
@@ -37,7 +36,9 @@ export function StakePage() {
   const { openWallet } = useOutletContext<AppOutlet>();
   const { stats, statsError, balances, balancesError, account, adapter, tx, run } = useStore();
   const [tab, setTab] = useState<Tab>('Stake');
-  const [asset, setAsset] = useState<DepositAsset>('VARA');
+  // On chain, native VARA staking is not live yet: the picker starts on the first live pool.
+  const order: DepositAsset[] = adapter.stakingLive ? ['VARA', 'USDT', 'USDC'] : ['USDT', 'USDC'];
+  const [asset, setAsset] = useState<DepositAsset>(order[0]);
   const [amt, setAmt] = useState('');
   const [path, setPath] = useState<Path>('instant');
   const [touched, setTouched] = useState(false);
@@ -49,11 +50,11 @@ export function StakePage() {
   const { deposit, receipt, decimals } = ASSETS[asset];
   const isVara = asset === 'VARA';
   const fmt = (v: bigint, dp = 2) => formatUnits(v, decimals, dp);
-  const apyBps = stats ? (isVara ? stats.stakeApyBps : stats.vaultApyBps[asset]) : null;
+  const apyBps = stats ? (isVara ? stats.stakeApyBps : stats.vaults[asset].apyBps) : null;
   // Rates keep accruing between stat refreshes; project them to the current second.
-  const rate = stats ? accrueRate(isVara ? stats.rate : stats.vaultSharePrice[asset], apyBps ?? 0n, now - stats.at) : null;
+  const rate = stats ? accrueRate(isVara ? stats.rate : stats.vaults[asset].rate, apyBps ?? 0n, now - stats.at) : null;
   const parsed = useMemo(() => parseUnits(amt, decimals), [amt, decimals]);
-  const bal = tab === 'Stake' ? balances?.[deposit as 'VARA' | 'wUSDT' | 'wUSDC'] ?? 0n : balances?.[receipt as 'kVARA' | 'kUSDT' | 'kUSDC'] ?? 0n;
+  const bal = tab === 'Stake' ? balances?.[deposit as 'VARA' | 'USDT' | 'USDC'] ?? 0n : balances?.[receipt as 'kVARA' | 'kUSDT' | 'kUSDC'] ?? 0n;
   const validation = validateAmount(amt, parsed, balances ? bal : null);
   const error = touched && !validation.ok && validation.reason !== 'empty' ? REASON[validation.reason] : undefined;
 
@@ -61,10 +62,12 @@ export function StakePage() {
     if (!rate || !parsed) return { main: 0n, fee: 0n };
     if (tab === 'Stake') return { main: assetsToShares(parsed, rate), fee: 0n };
     const gross = sharesToAssets(parsed, rate);
-    if (path === 'instant' || !isVara) { const fee = (gross * INSTANT_UNSTAKE_FEE_BPS) / BPS; return { main: gross - fee, fee }; }
+    if (path === 'instant') { const fee = (gross * INSTANT_UNSTAKE_FEE_BPS) / BPS; return { main: gross - fee, fee }; }
     return { main: gross, fee: 0n };
-  }, [rate, parsed, tab, path, isVara]);
+  }, [rate, parsed, tab, path]);
 
+  const unbondSecs = !isVara && stats ? stats.vaults[asset].unbondSecs : 7 * 86_400;
+  const unbondLabel = unbondSecs >= 86_400 ? `${Math.round(unbondSecs / 86_400)} days` : unbondSecs >= 3600 ? `${Math.round(unbondSecs / 3600)} h` : `${Math.max(1, Math.round(unbondSecs / 60))} min`;
   const price = isVara ? stats?.varaPriceUsd ?? 0 : 1;
   const usd = (v: bigint) => formatUsd(toNumber(v, decimals) * price);
   const busy = tx.stage === 'broadcast';
@@ -80,7 +83,9 @@ export function StakePage() {
         ? await run('Stake', (addr) => adapter.stake(addr, a), { title: `Staked ${fmt(a)} VARA`, detail: `You received ${fmt(out.main)} kVARA at rate ${formatRate(rate)}.` })
         : await run(`Deposit ${deposit}`, (addr) => adapter.depositVault(addr, asset, a), { title: `Deposited ${fmt(a)} ${deposit}`, detail: `You received ${fmt(out.main)} ${receipt} at share price ${formatRate(rate)}.` });
     } else if (!isVara) {
-      ok = await run(`Withdraw ${asset}`, (addr) => adapter.redeemVault(addr, asset, a), { title: `Withdrew ${fmt(out.main)} ${deposit}`, detail: '0.3% instant exit fee applied.' });
+      ok = path === 'instant'
+        ? await run(`Withdraw ${asset}`, (addr) => adapter.redeemVault(addr, asset, a), { title: `Withdrew ${fmt(out.main)} ${deposit}`, detail: '0.3% instant exit fee applied.' })
+        : await run(`Unbond ${asset}`, (addr) => adapter.unbondVault(addr, asset, a), { title: 'Unbond started', detail: `${fmt(out.main)} ${asset} claimable after the unbond period at full rate.` });
     } else if (path === 'instant') {
       ok = await run('Instant unstake', (addr) => adapter.unstakeInstant(addr, a), { title: 'Unstaked instantly', detail: `${fmt(out.main)} VARA received · 0.3% fee applied.` });
     } else {
@@ -89,8 +94,8 @@ export function StakePage() {
     if (ok) reset();
   };
 
-  const label = !account ? 'Connect wallet' : tab === 'Stake' ? (isVara ? 'Stake' : `Deposit ${deposit}`) : !isVara ? 'Withdraw instantly' : path === 'instant' ? 'Unstake instantly' : 'Start unbond';
-  const pickable = tab === 'Stake' ? ORDER.map((a) => ASSETS[a].deposit) : ORDER.map((a) => ASSETS[a].receipt);
+  const label = !account ? 'Connect wallet' : tab === 'Stake' ? (isVara ? 'Stake' : `Deposit ${deposit}`) : path === 'instant' ? (isVara ? 'Unstake instantly' : 'Withdraw instantly') : 'Start unbond';
+  const pickable = tab === 'Stake' ? order.map((a) => ASSETS[a].deposit) : order.map((a) => ASSETS[a].receipt);
 
   return (
     <div className="ap-stake">
@@ -101,7 +106,7 @@ export function StakePage() {
           {account ? (
             balancesError ? <span style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--danger)' }}>{balancesError}</span> : (
               <span className={balances ? undefined : 'skeleton'} style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 14, minWidth: balances ? undefined : 140 }}>
-                {balances ? <>{fmt(balances[deposit as 'VARA' | 'wUSDT' | 'wUSDC'])} {deposit} <span style={{ color: 'var(--text-3)' }}>( {usd(balances[deposit as 'VARA' | 'wUSDT' | 'wUSDC'])} )</span></> : '0.00'}
+                {balances ? <>{fmt(balances[deposit as 'VARA' | 'USDT' | 'USDC'])} {deposit} <span style={{ color: 'var(--text-3)' }}>( {usd(balances[deposit as 'VARA' | 'USDT' | 'USDC'])} )</span></> : '0.00'}
               </span>
             )
           ) : (
@@ -126,14 +131,11 @@ export function StakePage() {
               disabled={busy}
             />
           </div>
-          {tab === 'Unstake' && isVara && (
+          {tab === 'Unstake' && (
             <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
               <ExitOption title="Instant" sub="~0.3% fee · now" active={path === 'instant'} onClick={() => setPath('instant')} />
-              <ExitOption title="Native unbond" sub="free · 7 days" active={path === 'native'} onClick={() => setPath('native')} />
+              <ExitOption title={isVara ? 'Native unbond' : 'Unbond'} sub={`free · ${unbondLabel}`} active={path === 'native'} onClick={() => setPath('native')} />
             </div>
-          )}
-          {tab === 'Unstake' && !isVara && (
-            <p style={{ fontSize: 12.5, color: 'var(--text-3)', margin: '10px 2px 0', lineHeight: 1.5 }}>Stable vaults exit instantly with a 0.3% fee; there is no unbonding period.</p>
           )}
           <div style={{ margin: '10px 0 14px' }}>
             <IRow icon={<ChartPie size={14} strokeWidth={1.5} />} k="Position" v={balances ? `${fmt(balances[receipt as 'kVARA' | 'kUSDT' | 'kUSDC'])} ${receipt}` : account ? '…' : '—'} loading={!!account && !balances} />
