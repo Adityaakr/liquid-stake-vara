@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
+import { AccountProvider } from '@gear-js/react-hooks';
 import { StoreProvider } from '@/chain/store';
-import { MockAdapter } from '@/chain/mockAdapter';
+import { MockAdapter, T0 } from '@/chain/mockAdapter';
 import { LandingPage } from '@/landing/LandingPage';
 import { AppLayout } from '@/app/AppLayout';
 import { StakePage } from '@/app/StakePage';
@@ -11,11 +12,11 @@ import { PortfolioPage } from '@/app/PortfolioPage';
 import { VaultsPage } from '@/app/VaultsPage';
 import { Outlet } from 'react-router';
 
-function mount(path: string, adapter = new MockAdapter('mainnet', { latencyMs: 0, storage: false })) {
+function mount(path: string, adapter = new MockAdapter('mainnet', { latencyMs: 0, storage: false, now: () => T0 })) {
   const router = createMemoryRouter(
     [
       {
-        element: <StoreProvider adapter={adapter}><Outlet /></StoreProvider>,
+        element: <AccountProvider appName="test"><StoreProvider adapter={adapter}><Outlet /></StoreProvider></AccountProvider>,
         children: [
           { path: '/', element: <LandingPage /> },
           { path: '/app', element: <AppLayout />, children: [{ index: true, element: <StakePage /> }, { path: 'vaults', element: <VaultsPage /> }, { path: 'portfolio', element: <PortfolioPage /> }] },
@@ -27,11 +28,12 @@ function mount(path: string, adapter = new MockAdapter('mainnet', { latencyMs: 0
   return render(<RouterProvider router={router} />);
 }
 
-beforeEach(() => { localStorage.clear(); });
+// Freeze wall-clock time at the simulation epoch so the UI's live projections match the mock's fixed clock.
+beforeEach(() => { localStorage.clear(); vi.useFakeTimers({ toFake: ['Date'], now: T0 }); });
+afterEach(() => { vi.useRealTimers(); });
 
 async function connectDemo(user: ReturnType<typeof userEvent.setup>) {
-  await user.click((await screen.findAllByRole('button', { name: 'Connect wallet' }))[0]);
-  await user.click(screen.getByRole('button', { name: 'Use a demo account' }));
+  await user.click(await screen.findByRole('button', { name: 'Use a demo account' }));
 }
 
 describe('landing', () => {
@@ -74,7 +76,7 @@ describe('app', () => {
 
   it('unstake instant shows the fee and native shows 7 day copy', async () => {
     const user = userEvent.setup();
-    const adapter = new MockAdapter('mainnet', { latencyMs: 0, storage: false });
+    const adapter = new MockAdapter('mainnet', { latencyMs: 0, storage: false, now: () => T0 });
     mount('/app', adapter);
     await connectDemo(user);
     await screen.findByText('1,240.52 VARA', { exact: false });
@@ -94,5 +96,6 @@ describe('app', () => {
     expect(await screen.findByText(/Connect a wallet to see your positions/)).toBeInTheDocument();
     mount('/app/vaults');
     expect((await screen.findAllByText(/Deposit APY/)).length).toBe(2);
+    expect(screen.getByText(/Staking APY/)).toBeInTheDocument();
   });
 });

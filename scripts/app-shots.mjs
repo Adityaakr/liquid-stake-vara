@@ -4,15 +4,15 @@
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 const root = new URL('..', import.meta.url).pathname;
-const srv = spawn('pnpm', ['exec', 'vite', 'preview', '--port', '4175', '--strictPort'], { cwd: root, stdio: 'ignore' });
+const srv = spawn('node', ['node_modules/vite/bin/vite.js', 'preview', '--port', '4175', '--strictPort'], { cwd: root, stdio: 'ignore' });
 await new Promise((r) => setTimeout(r, 2500));
 const browser = await chromium.launch();
 async function session(viewport) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2 });
+  // Sign in as the simulation's demo account before the app loads; the sidebar toggle is hidden on phones.
+  await ctx.addInitScript(() => localStorage.setItem('vale.wallet.v1', JSON.stringify({ address: 'kGj1akEAemmGoVyFqeHVSNUyUj1mJp3gazUYy7Zs2p7BsgT88', name: 'Demo', source: 'demo' })));
   const page = await ctx.newPage();
-  await page.goto('http://localhost:4175/app', { waitUntil: 'networkidle' }); await page.waitForTimeout(600);
-  await page.getByRole('button', { name: 'Connect wallet' }).first().click();
-  await page.getByRole('button', { name: 'Use a demo account' }).click(); await page.waitForTimeout(400);
+  await page.goto('http://localhost:4175/app', { waitUntil: 'load' }); await page.waitForTimeout(600);
   await page.getByRole('textbox', { name: 'You stake' }).fill('400');
   await page.getByRole('button', { name: 'Stake' }).click(); await page.waitForTimeout(1200);
   await page.evaluate(() => document.querySelectorAll('[aria-label="Dismiss"]').forEach((b) => b.click()));
@@ -20,7 +20,7 @@ async function session(viewport) {
   return { ctx, page };
 }
 async function shot(page, path, out, h) {
-  if (path) { await page.goto('http://localhost:4175' + path, { waitUntil: 'networkidle' }); await page.waitForTimeout(700); }
+  if (path) { await page.goto('http://localhost:4175' + path, { waitUntil: 'load' }); await page.waitForTimeout(700); }
   await page.evaluate(() => document.querySelectorAll('[aria-label="Dismiss"]').forEach((b) => b.click()));
   await page.waitForTimeout(200);
   const w = page.viewportSize().width;
