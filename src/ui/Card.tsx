@@ -3,7 +3,7 @@ import type { CSSProperties, HTMLAttributes, ReactNode } from 'react';
 export type CardProps = HTMLAttributes<HTMLDivElement> & {
   variant?: 'panel' | 'wash' | 'deep';
   pad?: number | string;
-  glow?: 'vaultera' | 'surf';
+  glow?: 'vale' | 'surf';
   hover?: boolean;
   radius?: number;
   children?: ReactNode;
@@ -14,7 +14,7 @@ export function Card({ variant = 'panel', pad = 24, glow, hover, radius, style, 
   const cls = ['t-card', variant === 'wash' ? 't-card-wash' : variant === 'deep' ? 't-card-deep' : '', hover ? 't-card-hover' : '', className]
     .filter(Boolean)
     .join(' ');
-  const sh = glow === 'vaultera' ? 'var(--shadow-card),var(--glow-tide)' : glow === 'surf' ? 'var(--shadow-card),var(--glow-surf)' : undefined;
+  const sh = glow === 'vale' ? 'var(--shadow-card),var(--glow-tide)' : glow === 'surf' ? 'var(--shadow-card),var(--glow-surf)' : undefined;
   return (
     <div className={cls} style={{ padding: pad, borderRadius: radius, boxShadow: sh, ...style }} {...rest}>
       {children}

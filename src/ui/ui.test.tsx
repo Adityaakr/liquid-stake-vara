@@ -14,10 +14,10 @@ describe('amount input normalization', () => {
 
 describe('remembered account', () => {
   it('drops malformed storage instead of crashing', () => {
-    localStorage.setItem('vaultera.wallet.v1', JSON.stringify({ nope: true }));
+    localStorage.setItem('vale.wallet.v1', JSON.stringify({ nope: true }));
     expect(recallAccount()).toBeNull();
-    expect(localStorage.getItem('vaultera.wallet.v1')).toBeNull();
-    localStorage.setItem('vaultera.wallet.v1', '{not json');
+    expect(localStorage.getItem('vale.wallet.v1')).toBeNull();
+    localStorage.setItem('vale.wallet.v1', '{not json');
     expect(recallAccount()).toBeNull();
   });
 });

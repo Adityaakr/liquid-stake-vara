@@ -19,7 +19,7 @@ export type BadgeProps = HTMLAttributes<HTMLSpanElement> & {
   style?: CSSProperties;
 };
 
-export function Badge({ tone = 'neutral', dot, mono, size = 'md', children, style, ...rest }: BadgeProps) {
+export function Badge({ tone = 'neutral', dot: _dot, mono, size = 'md', children, style, ...rest }: BadgeProps) {
   const [c, b, bg] = T[tone];
   const sm = size === 'sm';
   return (
@@ -32,7 +32,6 @@ export function Badge({ tone = 'neutral', dot, mono, size = 'md', children, styl
       }}
       {...rest}
     >
-      {dot && <span style={{ width: 6, height: 6, borderRadius: 99, background: c }} />}
       {children}
     </span>
   );
