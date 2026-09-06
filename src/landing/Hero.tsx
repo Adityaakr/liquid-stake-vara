@@ -29,7 +29,7 @@ export function Hero() {
               <Btn to="/features">View product</Btn>
             </div>
             <div className="fx-hero-list">
-              <ListItem variant="fit" icon="star">8.6M+ VARA staked</ListItem>
+              <ListItem variant="fit" icon="star">$1.2M+ total value locked</ListItem>
               <span className="fx-line" />
               <ListItem variant="fit" icon="shield">Audited &amp; insured</ListItem>
               <span className="fx-line" />
@@ -37,7 +37,7 @@ export function Hero() {
             </div>
           </div>
           <div className="fx-hero-bottom">
-            <div className="fx-hero-shot"><Shot name="app-hero" alt="The Vaultera staking dashboard" width={1400} height={846} mobileHeight={760} /></div>
+            <div className="fx-hero-shot"><Shot name="app-hero" alt="The Vale Protocol staking dashboard" width={1400} height={846} mobileHeight={760} /></div>
           </div>
         </div>
       </Container>

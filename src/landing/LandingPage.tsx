@@ -6,7 +6,7 @@ import { Comparison, Features, Integrations, Overview, Security, Stats, Steps, T
 import { FAQs, Footer, Pricing } from './Closing';
 
 export function LandingPage() {
-  useEffect(() => { document.title = 'Vaultera — Liquid staking on Vara'; }, []);
+  useEffect(() => { document.title = 'Vale Protocol — Liquid staking on Vara'; }, []);
   return (
     <div style={{ background: '#fff', overflow: 'clip' }}>
       <LandingNav />

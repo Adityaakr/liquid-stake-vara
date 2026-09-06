@@ -26,9 +26,9 @@ export function Comparison() {
           <div className="fx-ba" data-side={side}>
             <div className="fx-ba-tabs" role="tablist">
               <div className="fx-ba-overlay-top" aria-hidden />
-              <button type="button" role="tab" className="fx-ba-tab" data-side="before" aria-selected={side === 'before'} onClick={() => setSide('before')}>Before Vaultera</button>
+              <button type="button" role="tab" className="fx-ba-tab" data-side="before" aria-selected={side === 'before'} onClick={() => setSide('before')}>Before Vale Protocol</button>
               <span className="fx-ba-knob" aria-hidden><img src={`${FX}BepIwACX380EUEqBMK5sdcQgh3k.png`} alt="" width={130} /></span>
-              <button type="button" role="tab" className="fx-ba-tab" data-side="after" aria-selected={side === 'after'} onClick={() => setSide('after')}>After Vaultera</button>
+              <button type="button" role="tab" className="fx-ba-tab" data-side="after" aria-selected={side === 'after'} onClick={() => setSide('after')}>After Vale Protocol</button>
             </div>
             <div className="fx-ba-frame">
               <div className="fx-ba-panel">
@@ -150,7 +150,7 @@ export function Overview() {
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 30, width: '100%' }}>
-            <div className="fx-overview-shot"><div><Shot name="app-overview" alt="The Vaultera vaults dashboard" width={1400} height={846} mobileHeight={760} /></div></div>
+            <div className="fx-overview-shot"><div><Shot name="app-overview" alt="The Vale Protocol vaults dashboard" width={1400} height={846} mobileHeight={760} /></div></div>
             <div className="fx-overview-cards">
               <OverviewCard icon={<Rocket size={20} strokeWidth={2} />} lead="All your positions in one place:">Stake, vault shares and unbonding queue together in one clear, unified view.</OverviewCard>
               <OverviewCard icon={<Zap size={20} strokeWidth={2} />} lead="Make progress faster:">One transaction to stake, one to exit, with no claiming and no waiting on rewards.</OverviewCard>
@@ -259,7 +259,7 @@ export function UseCases() {
         <div className="fx-badges">
           <Badge>12,400+ Holders</Badge><Badge>4.9 Rating</Badge><Badge>Real-time rate</Badge><Badge>Audited &amp; insured</Badge>
         </div>
-        <FounderCard content="“We built Vaultera to remove the lock-up from staking and give people a receipt token that composes with everything.”" avatar={`${FX}7Z2d6WeDiCpoz0B6ookMTPOFAU.jpg`} jobTitle="Founder &amp; CEO" />
+        <FounderCard content="“We built Vale Protocol to remove the lock-up from staking and give people a receipt token that composes with everything.”" avatar={`${FX}7Z2d6WeDiCpoz0B6ookMTPOFAU.jpg`} jobTitle="Founder &amp; CEO" />
       </div>
     </Section>
   );
@@ -304,7 +304,7 @@ export function Integrations() {
 /* ---------- Stats ---------- */
 const STATS: { pre: string; title: string; desc: string; icon: ReactNode; variant: 'default' | 'dark' | 'primary'; pos: React.CSSProperties }[] = [
   { pre: 'Active stakers', title: '12,400+', desc: 'Wallets, pools and vaults holding kVARA.', icon: <Users size={20} />, variant: 'default', pos: { left: 50, top: 130 } },
-  { pre: 'VARA staked', title: '8.6M+', desc: 'Bonded across a curated validator set.', icon: <Coins size={20} />, variant: 'dark', pos: { right: 0, top: 120 } },
+  { pre: 'Total value locked', title: '$1.2M+', desc: 'Across the kVARA, kUSDT and kUSDC pools.', icon: <Coins size={20} />, variant: 'dark', pos: { right: 0, top: 120 } },
   { pre: 'Rewards paid', title: '940K', desc: 'VARA compounded into the rate, era by era.', icon: <Sparkles size={20} />, variant: 'dark', pos: { left: 20, top: 620 } },
   { pre: 'Validators covered', title: '120+', desc: 'Screened for commission, uptime and history.', icon: <Globe size={20} />, variant: 'primary', pos: { left: 430, top: 680 } },
   { pre: 'Protocol uptime', title: '99.9%', desc: 'Reliable access to your stake and exits.', icon: <Timer size={20} />, variant: 'default', pos: { right: 0, top: 590 } },
@@ -330,7 +330,7 @@ export function Stats() {
 
 /* ---------- Testimonials ---------- */
 const TESTI: [string, string, string, string][] = [
-  ['Vaultera let me keep staking while I actually use my VARA. The rate is transparent and the exits just work.', '7Z2d6WeDiCpoz0B6ookMTPOFAU.jpg', 'David Miller', 'Individual staker'],
+  ['Vale Protocol let me keep staking while I actually use my VARA. The rate is transparent and the exits just work.', '7Z2d6WeDiCpoz0B6ookMTPOFAU.jpg', 'David Miller', 'Individual staker'],
   ['Managing a treasury position is far easier now. kVARA sits in our vault and the reporting saves us hours every week.', 'hYfCvJ3IVdEznEOwIQiiAxWOsPY.jpg', 'Sarah Thompson', 'DAO treasurer'],
   ['Instant exits through the buffer mean I can react to the market the moment it moves. It is part of my daily workflow.', '622M5cyJBdKPIK1fPnBlo3qONk.jpg', 'Michael Chen', 'Active trader'],
   ['The vault dashboard makes the share price and utilization far easier to interpret than any other Vara protocol.', 'W13V3WO2YwDah4yBxCcZc70Es.jpg', 'Emily Rodriguez', 'DeFi analyst'],

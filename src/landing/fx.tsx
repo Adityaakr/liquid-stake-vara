@@ -217,7 +217,7 @@ export function FaqsCta({ avatars }: { avatars: string[] }) {
         <div className="fx-faqcta-t">Still have questions?</div>
         <div className="fx-faqcta-d">Reach out, and our team will guide you.</div>
       </div>
-      <BtnIcon variant="dark" href="mailto:hello@vaultera.xyz">Talk to our team</BtnIcon>
+      <BtnIcon variant="dark" href="mailto:hello@valeprotocol.xyz">Talk to our team</BtnIcon>
     </div>
   );
 }

@@ -1,13 +1,25 @@
 import { useState } from 'react';
 import { Link, NavLink } from 'react-router';
-import { Layers } from 'lucide-react';
 import { BtnIcon } from './fx';
+
+/** The wave mark: the same drawing as the favicon, on the brand's deep violet tile. */
+export function WaveMark({ size = 32, light }: { size?: number; light?: boolean }) {
+  const stroke = light ? '#211C30' : 'url(#vale-wave)';
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden style={{ display: 'block', flexShrink: 0 }}>
+      <rect width="64" height="64" rx="16" fill={light ? '#FFFFFF' : '#211C30'} />
+      <defs><linearGradient id="vale-wave" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#FFFFFF" /><stop offset="1" stopColor="#A3A4FF" /></linearGradient></defs>
+      <path d="M14 40c6 0 6-8 12-8s6 8 12 8 6-8 12-8" fill="none" stroke={stroke} strokeWidth="5" strokeLinecap="round" />
+      <path d="M14 28c6 0 6-8 12-8s6 8 12 8 6-8 12-8" fill="none" stroke={stroke} strokeWidth="5" strokeLinecap="round" opacity=".55" />
+    </svg>
+  );
+}
 
 export function Wordmark({ size = 24, href = '/', light }: { size?: number; href?: string; light?: boolean }) {
   return (
-    <Link to={href} aria-label="vaultera home" className="fx-wordmark" style={{ fontSize: size, color: light ? '#fff' : undefined }}>
-      <span className="fx-wordmark-mark" style={{ width: size * 1.33, height: size * 1.33, borderRadius: size * 0.38, background: light ? '#fff' : undefined, color: light ? '#1D1D1D' : undefined }}><Layers size={size * 0.7} strokeWidth={2.2} /></span>
-      vaultera
+    <Link to={href} aria-label="Vale Protocol home" className="fx-wordmark" style={{ fontSize: size, color: light ? '#fff' : undefined }}>
+      <WaveMark size={Math.round(size * 1.33)} light={light} />
+      vale
     </Link>
   );
 }

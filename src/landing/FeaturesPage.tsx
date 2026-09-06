@@ -9,7 +9,7 @@ import { BgItem, BtnIcon, CapabilityCard, Container, IntegrationCard, ListItem, 
 const FX = '/fx/';
 
 export function FeaturesPage() {
-  useEffect(() => { document.title = 'Product — Vaultera'; window.scrollTo(0, 0); }, []);
+  useEffect(() => { document.title = 'Product — Vale Protocol'; window.scrollTo(0, 0); }, []);
   return (
     <div style={{ background: '#fff', overflow: 'clip' }}>
       <LandingNav />
@@ -24,11 +24,11 @@ export function FeaturesPage() {
                 </div>
                 <div className="fx-phero-stats">
                   <StatItem size="sm" title="99.9%" description="Reliable access to your stake and exits." />
-                  <StatItem size="sm" title="8.6M+" description="VARA bonded across the validator set." />
+                  <StatItem size="sm" title="$1.2M+" description="Total value locked across the kVARA, kUSDT and kUSDC pools." />
                 </div>
                 <BtnIcon to="/app">Start staking now</BtnIcon>
               </div>
-              <div className="fx-phero-shot"><Shot name="app-portfolio" alt="The Vaultera portfolio view" width={1400} height={800} mobileHeight={700} /></div>
+              <div className="fx-phero-shot"><Shot name="app-portfolio" alt="The Vale Protocol portfolio view" width={1400} height={800} mobileHeight={700} /></div>
             </div>
           </Container>
           {[['Rorgfh4qpKNsZyFzGNQ9wt5C0i4.png', 350, { left: -140, top: 40 }], ['fLN6Wx8BsWTV2MkQDeC8mB2BQKA.png', 240, { right: 40, top: 100 }], ['lSZuKptayJeB4Xcw10qjE7IisQw.png', 350, { right: -160, top: 330 }]].map(([f, h, pos]) => (
@@ -63,7 +63,7 @@ export function FeaturesPage() {
           <Container>
             <div className="fx-top" style={{ maxWidth: 800, margin: '0 auto' }}>
               <PreTitle>Capabilities</PreTitle>
-              <h2 className="fx-h2 fx-center">Everything inside Vaultera</h2>
+              <h2 className="fx-h2 fx-center">Everything inside Vale Protocol</h2>
             </div>
             <div className="fx-caps-grid">
               <CapabilityCard icon={<Cpu size={24} />} title="Non-rebasing kVARA" description="A fixed balance and a rising redemption rate compose with every DEX, bridge and market." />
@@ -99,7 +99,7 @@ export function FeaturesPage() {
                 <div className="fx-top-left">
                   <PreTitle>Under the hood</PreTitle>
                   <h2 className="fx-h2">Risk analysis that<br />goes deeper</h2>
-                  <p className="fx-body">Most protocols show you what happened. Vaultera stress-tests every parameter against slashes, price gaps and utilization spikes before they reach you.</p>
+                  <p className="fx-body">Most protocols show you what happened. Vale Protocol stress-tests every parameter against slashes, price gaps and utilization spikes before they reach you.</p>
                 </div>
                 <div className="fx-split-list">
                   <ListItem>Simulate slashes and price shocks against the fund</ListItem>

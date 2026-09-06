@@ -70,7 +70,7 @@ export function Pricing() {
                 <h3 className="fx-h6">Validators &amp; institutions</h3>
                 <p className="fx-body">Need a custom nomination set or treasury integration? Talk with our team to design a setup for your needs.</p>
               </div>
-              <div><Btn variant="dark" href="mailto:hello@vaultera.xyz">Contact us</Btn></div>
+              <div><Btn variant="dark" href="mailto:hello@valeprotocol.xyz">Contact us</Btn></div>
               <img src={`${FX}KbVFR1CeRk5msFRW70lzRZLV8I.png`} alt="" aria-hidden />
             </div>
           </div>
@@ -82,7 +82,7 @@ export function Pricing() {
 
 /* ---------- FAQs ---------- */
 const QS: [string, string][] = [
-  ['How secure is my staked VARA?', 'Vaultera is non-custodial: your VARA is bonded on chain to a curated validator set and kVARA is minted to your wallet. Slashes are deferred seven days and an insurance fund fills before the treasury sees a token.'],
+  ['How secure is my staked VARA?', 'Vale Protocol is non-custodial: your VARA is bonded on chain to a curated validator set and kVARA is minted to your wallet. Slashes are deferred seven days and an insurance fund fills before the treasury sees a token.'],
   ['Can I unstake instantly?', 'Yes. Swap kVARA for VARA from the liquidity buffer or the DEX for a 0.3% fee, or burn kVARA and unbond natively for free in seven days at the full rate.'],
   ['How do the rewards work?', 'kVARA is non-rebasing. Your balance stays fixed while the redemption rate rises every era as staking rewards compound, so there is nothing to claim.'],
   ['Is there a minimum amount to stake?', 'No. Vara requires 50 VARA to nominate, so the protocol pools smaller deposits and nominates them together.'],
@@ -114,7 +114,7 @@ export function Footer({ current }: { current?: string }) {
   const cols: [string, [string, string][]][] = [
     ['Quick links', [['/#features', 'Features'], ['/#how-it-works', 'How it works'], ['/#use-cases', 'Use cases'], ['/#integrations', 'Integrations']]],
     ['Pages', [['/features', 'Product'], ['/app', 'Stake'], ['/app/vaults', 'Vaults'], ['/app/portfolio', 'Portfolio']]],
-    ['Support', [['/#faq', 'FAQs'], ['mailto:hello@vaultera.xyz', 'Contact'], ['https://wiki.vara.network/', 'Vara docs'], ['/#security', 'Security']]],
+    ['Support', [['/#faq', 'FAQs'], ['mailto:hello@valeprotocol.xyz', 'Contact'], ['https://wiki.vara.network/', 'Vara docs'], ['/#security', 'Security']]],
   ];
   return (
     <footer className="fx-sec fx-footer">
@@ -137,7 +137,7 @@ export function Footer({ current }: { current?: string }) {
                   <Wordmark size={30} />
                   <p className="fx-body">The liquid staking standard on Vara. Stake VARA, hold kVARA, stay liquid.</p>
                 </div>
-                <Btn variant="dark" href="mailto:hello@vaultera.xyz">hello@vaultera.xyz</Btn>
+                <Btn variant="dark" href="mailto:hello@valeprotocol.xyz">hello@valeprotocol.xyz</Btn>
               </div>
               <div className="fx-footer-cols">
                 {cols.map(([h, links]) => (
