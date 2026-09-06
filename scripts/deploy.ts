@@ -1,5 +1,5 @@
 /**
- * Deploy the Vaultera programs (two demo tokens, two vaults) and wire them together.
+ * Deploy the Vale Protocol programs (two demo tokens, two vaults) and wire them together.
  *
  *   DEPLOYER_SEED='<mnemonic or //Alice>' pnpm deploy [--rpc wss://rpc.vara.network] [--out deployments/mainnet.json]
  *
@@ -23,8 +23,8 @@ if (!SEED) { console.error('Set DEPLOYER_SEED to the deployer mnemonic, seed or 
 
 const ONE = 1_000_000n; // 6 decimals
 const ASSETS = [
-  { asset: 'USDC', tokenName: 'Vaultera Demo USDC', vaultName: 'Vaultera kUSDC', apyBps: 790 },
-  { asset: 'USDT', tokenName: 'Vaultera Demo USDT', vaultName: 'Vaultera kUSDT', apyBps: 840 },
+  { asset: 'USDC', tokenName: 'Vale Demo USDC', vaultName: 'Vale kUSDC', apyBps: 790 },
+  { asset: 'USDT', tokenName: 'Vale Demo USDT', vaultName: 'Vale kUSDT', apyBps: 840 },
 ] as const;
 const FAUCET_AMOUNT = 1_000n * ONE;
 const FAUCET_COOLDOWN_SECS = Number(args.cooldown ?? 6 * 3600);
