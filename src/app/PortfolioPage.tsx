@@ -64,7 +64,7 @@ export function PortfolioPage() {
         ) : (
           <div className="ap-table-wrap">
             <table className="ap-table">
-              <thead><tr>{['Asset', 'Balance', 'Rate / share', 'Value', 'APY', 'Status'].map((h) => <th key={h} className="ap-th">{h}</th>)}</tr></thead>
+              <thead><tr>{['Asset', 'Balance', 'Rate', 'Value', 'APY', 'Status'].map((h) => <th key={h} className="ap-th">{h}</th>)}</tr></thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.tok} className="ap-row">
