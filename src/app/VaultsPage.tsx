@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router';
-import { ChevronRight, Droplets } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { AmountField, Badge, Bento, Button, Dialog, Stat, TokenIcon, type TokenSymbol } from '@/ui';
 import { useStore } from '@/chain/store';
 import { NETWORKS } from '@/chain/networks';
@@ -52,7 +52,7 @@ function ExitOption({ title, sub, active, onClick }: { title: string; sub: strin
 
 function VaultCard({ card }: { card: Card }) {
   const { openWallet } = useOutletContext<AppOutlet>();
-  const { stats, balances, unbonding, faucet, account, adapter, run, tx } = useStore();
+  const { stats, balances, unbonding, account, adapter, run, tx } = useStore();
   const now = useNow(1000);
   const [dialog, setDialog] = useState<'deposit' | 'withdraw' | null>(null);
   const [amt, setAmt] = useState('');
@@ -67,8 +67,6 @@ function VaultCard({ card }: { card: Card }) {
   const earned = card.principal !== null && value > card.principal ? value - card.principal : 0n;
   const inYear = (x: bigint) => x + (x * card.apyBps) / 10_000n;
   const hasPosition = card.receipts > 0n;
-  const f = !isVara ? faucet?.[asset] : undefined;
-  const faucetReady = !!f && f.amount > 0n && now >= f.nextClaimAt;
   const myUnbonds = unbonding.filter((u) => u.asset === asset);
 
   const depV = validateAmount(amt, parsed, balances ? card.wallet : null);
@@ -113,11 +111,6 @@ function VaultCard({ card }: { card: Card }) {
     if (ok) close();
   };
 
-  const doFaucet = async () => {
-    if (!account) { openWallet(); return; }
-    if (isVara) return;
-    await run(`${asset} faucet`, (addr) => adapter.claimFaucet(addr, asset), { title: `Received ${fmt(f?.amount ?? 0n, decimals)} demo ${asset}`, detail: 'Demo tokens have no value. Deposit them to try the vault.' });
-  };
 
   const disabled = !card.live || card.paused;
 
@@ -151,12 +144,6 @@ function VaultCard({ card }: { card: Card }) {
         <Button size="lg" style={{ flex: 1, minWidth: 140 }} disabled={disabled} onClick={() => { if (!account) { openWallet(); return; } setDialog('deposit'); }}>{isVara ? 'Stake VARA' : `Deposit ${asset}`}</Button>
         <Button size="lg" variant="secondary" style={{ flex: 1, minWidth: 140 }} disabled={disabled || !account || !hasPosition} onClick={() => setDialog('withdraw')}>{isVara ? 'Unstake' : 'Withdraw'}</Button>
       </div>
-      {!isVara && (
-        <button type="button" className="ap-faucet" disabled={disabled || busy || (!!account && !faucetReady)} onClick={doFaucet} title={!account ? 'Connect a wallet first' : undefined}>
-          <Droplets size={15} strokeWidth={1.5} />
-          {!account ? `Get demo ${asset} from the faucet` : faucetReady ? `Get ${fmt(f?.amount ?? 0n, decimals, 0)} demo ${asset}` : f && f.amount === 0n ? 'Faucet is off' : `Faucet again in ${formatCountdown((f?.nextClaimAt ?? 0) - now)}`}
-        </button>
-      )}
       {myUnbonds.length > 0 && (
         <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {myUnbonds.map((u) => {
