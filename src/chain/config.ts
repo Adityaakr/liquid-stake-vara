@@ -26,6 +26,12 @@ export function readPrograms(env: Partial<Record<string, string>> = {}): Partial
   return out;
 }
 
+/** The kVARA pool program id from the environment, when configured. */
+export function readPool(env: Partial<Record<string, string>> = {}): HexString | undefined {
+  const v = env.VITE_KVARA_POOL;
+  return v && HEX32.test(v) ? (v as HexString) : readId('VITE_KVARA_POOL');
+}
+
 /** Gas limits for messages to the programs. Unused gas is refunded by the runtime. */
 export const GAS = {
   /**
@@ -38,4 +44,6 @@ export const GAS = {
   vaultSync: 40_000_000_000n,
   /** Token commands (approve, faucet claim, transfer). */
   token: 30_000_000_000n,
+  /** kVARA pool commands: everything is synchronous, value travels with the message. */
+  pool: 40_000_000_000n,
 } as const;

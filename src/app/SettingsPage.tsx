@@ -118,6 +118,11 @@ export function SettingsPage() {
         <Row k="RPC" v={net.rpc} />
         <Row k="Mode" v={adapter.simulated ? 'simulation' : adapter.deployed ? 'live programs' : 'programs not configured'} />
         {stats?.blockNumber !== undefined && <Row k="Latest block" v={stats.blockNumber.toLocaleString('en-US')} />}
+        {adapter instanceof GearAdapter && (
+          adapter.pool
+            ? <Row k="kVARA pool" v={<a href={`${net.explorer}/account/${adapter.pool}`} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{shortAddress(adapter.pool, 10, 6)} <ExternalLink size={12} /></a>} />
+            : <Row k="kVARA pool" v="not configured" />
+        )}
         {programs && VAULT_ASSETS.map((asset) => {
           const ids = programs[asset];
           if (!ids) return <Row key={asset} k={`${asset} programs`} v="not configured" />;

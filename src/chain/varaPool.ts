@@ -3,9 +3,10 @@ import { accrueRate } from '@/domain/math';
 import { parseRate } from '@/domain/format';
 
 /**
- * The kVARA pool. Native VARA staking is not wired to validators on chain yet, so both adapters
- * report the pool from the same published figures: the rate accrues continuously from T0 at the
- * pool APY, so a receipt is visibly worth more every second it is held.
+ * The kVARA pool's published figures: the simulation runs on them, and the chain adapter shows
+ * them until a pool program id is configured (after that everything comes from the program).
+ * The rate accrues continuously from T0 at the pool APY, so a receipt is visibly worth more
+ * every second it is held.
  */
 export const T0 = Date.UTC(2026, 8, 1);
 export const BASE_ERA = 4182;

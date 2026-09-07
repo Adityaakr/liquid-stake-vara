@@ -1,0 +1,256 @@
+
+!@sails: 1.0.1
+
+service Vft@0x72760694e848b0e7 {
+    events {
+        Approval {
+            owner: ActorId,
+            spender: ActorId,
+            value: U256,
+        },
+        Transfer {
+            from: ActorId,
+            to: ActorId,
+            value: U256,
+        },
+    }
+    functions {
+        @query
+        Allowance(owner: ActorId, spender: ActorId) -> U256;
+        Approve(spender: ActorId, value: U256) -> bool throws PoolError;
+        @query
+        BalanceOf(account: ActorId) -> U256;
+        @query
+        Decimals() -> u8;
+        @query
+        Name() -> String;
+        @query
+        Symbol() -> String;
+        @query
+        TotalSupply() -> U256;
+        Transfer(to: ActorId, value: U256) -> bool throws PoolError;
+        TransferFrom(from: ActorId, to: ActorId, value: U256) -> bool throws PoolError;
+    }
+    types {
+        enum PoolError {
+            Paused,
+            ZeroAddress,
+            ZeroAmount,
+            BelowMinimum {
+                min: U256,
+            },
+            InsufficientShares,
+            InsufficientBalance,
+            InsufficientAllowance,
+            /// The pool's VARA reserve cannot cover this payout yet; nothing changed.
+            InsufficientReserve {
+                available: U256,
+            },
+            Unauthorized,
+            Overflow,
+            BadConfig,
+            UnbondNotFound,
+            UnbondNotReady {
+                claimable_at: u64,
+            },
+            /// The runtime refused the value transfer; the position was restored.
+            TransferFailed(String),
+            /// The session key acting for the owner has expired.
+            SessionExpired,
+            /// The session key acting for the owner may not perform this action.
+            SessionNotAllowed,
+            /// Session key, duration or action list is invalid.
+            BadSession,
+        }
+    }
+}
+
+service Pool@0xd332ff105e32f471 {
+    events {
+        Accrued {
+            rate: U256,
+            total_assets: U256,
+        },
+        AdminTransferred {
+            from: ActorId,
+            to: ActorId,
+        },
+        Claimed {
+            owner: ActorId,
+            id: u64,
+            assets: U256,
+        },
+        ConfigChanged {
+            apy_bps: u32,
+            instant_fee_bps: u32,
+            unbond_period_secs: u64,
+        },
+        FeesCollected {
+            to: ActorId,
+            assets: U256,
+        },
+        Paused {
+            by: ActorId,
+        },
+        Resumed {
+            by: ActorId,
+        },
+        RewardsFunded {
+            from: ActorId,
+            assets: U256,
+            reserve: U256,
+        },
+        SessionCreated {
+            owner: ActorId,
+            key: ActorId,
+            expires_at: u64,
+        },
+        SessionRevoked {
+            owner: ActorId,
+        },
+        Staked {
+            owner: ActorId,
+            assets: U256,
+            shares: U256,
+            rate: U256,
+        },
+        UnbondRequested {
+            owner: ActorId,
+            id: u64,
+            shares: U256,
+            assets: U256,
+            claimable_at: u64,
+        },
+        Unstaked {
+            owner: ActorId,
+            shares: U256,
+            assets: U256,
+            fee: U256,
+            rate: U256,
+        },
+    }
+    functions {
+        Accrue() -> U256;
+        Claim(id: u64) -> Result<U256, PoolError>;
+        CollectFees(to: ActorId) -> Result<U256, PoolError>;
+        CreateSession(key: ActorId, duration_secs: u64, actions: [SessionAction]) -> Result<Session, PoolError>;
+        FundRewards() -> Result<U256, PoolError>;
+        @query
+        Info() -> PoolInfo;
+        Pause() -> Result<bool, PoolError>;
+        @query
+        Position(account: ActorId) -> Position;
+        @query
+        PreviewStake(assets: U256) -> U256;
+        @query
+        PreviewUnstake(shares: U256) -> UnstakePreview;
+        @query
+        Rate() -> U256;
+        RequestUnbond(shares: U256) -> Result<Unbond, PoolError>;
+        Resume() -> Result<bool, PoolError>;
+        RevokeSession() -> bool;
+        @query
+        Session(owner: ActorId) -> Option<Session>;
+        @query
+        SessionOwner(key: ActorId) -> Option<ActorId>;
+        SetConfig(apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> Result<bool, PoolError>;
+        Stake() -> Result<U256, PoolError>;
+        TransferAdmin(to: ActorId) -> Result<bool, PoolError>;
+        @query
+        Unbonds(account: ActorId) -> [Unbond];
+        Unstake(shares: U256) -> Result<UnstakePreview, PoolError>;
+    }
+    types {
+        enum PoolError {
+            Paused,
+            ZeroAddress,
+            ZeroAmount,
+            BelowMinimum {
+                min: U256,
+            },
+            InsufficientShares,
+            InsufficientBalance,
+            InsufficientAllowance,
+            /// The pool's VARA reserve cannot cover this payout yet; nothing changed.
+            InsufficientReserve {
+                available: U256,
+            },
+            Unauthorized,
+            Overflow,
+            BadConfig,
+            UnbondNotFound,
+            UnbondNotReady {
+                claimable_at: u64,
+            },
+            /// The runtime refused the value transfer; the position was restored.
+            TransferFailed(String),
+            /// The session key acting for the owner has expired.
+            SessionExpired,
+            /// The session key acting for the owner may not perform this action.
+            SessionNotAllowed,
+            /// Session key, duration or action list is invalid.
+            BadSession,
+        }
+        struct PoolInfo {
+            admin: ActorId,
+            name: String,
+            symbol: String,
+            decimals: u8,
+            /// VARA per kVARA scaled by 1e18, projected to now.
+            rate: U256,
+            apy_bps: u32,
+            instant_fee_bps: u32,
+            unbond_period_secs: u64,
+            total_shares: U256,
+            /// VARA owed to share holders at the projected rate.
+            total_assets: U256,
+            /// VARA the pool physically holds for payouts (stakes plus funded rewards).
+            reserve: U256,
+            fees_accrued: U256,
+            unbonding_total: U256,
+            min_stake: U256,
+            paused: bool,
+            last_accrual_at: u64,
+        }
+        struct Position {
+            shares: U256,
+            assets: U256,
+        }
+        /// A session key registered by an owner: messages signed by `key` act for the owner until
+        /// `expires_at`. Payouts always go to the owner, never to the key.
+        struct Session {
+            key: ActorId,
+            expires_at: u64,
+            actions: [SessionAction],
+        }
+        /// Actions a session key may perform for its owner.
+        enum SessionAction {
+            Stake,
+            Unstake,
+            Unbond,
+            Claim,
+        }
+        struct Unbond {
+            id: u64,
+            shares: U256,
+            assets: U256,
+            requested_at: u64,
+            claimable_at: u64,
+        }
+        struct UnstakePreview {
+            assets: U256,
+            fee: U256,
+            net: U256,
+        }
+    }
+}
+
+program VaraPoolClient {
+    constructors {
+        New(name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64);
+    }
+    services {
+        Vft@0x72760694e848b0e7,
+        Pool@0xd332ff105e32f471,
+    }
+}

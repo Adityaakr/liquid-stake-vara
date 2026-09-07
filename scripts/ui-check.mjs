@@ -15,6 +15,7 @@ const env = {
   ...process.env,
   VITE_ADAPTER: 'gear',
   VITE_VARA_RPC: RPC,
+  VITE_KVARA_POOL: dep.pool ?? '',
   VITE_USDC_TOKEN: dep.programs.USDC.token,
   VITE_KUSDC_VAULT: dep.programs.USDC.vault,
   VITE_USDT_TOKEN: dep.programs.USDT.token,
@@ -36,15 +37,16 @@ try {
   const text = await page.innerText('body');
   expect(!text.includes('not configured'), 'vaults are configured (no warning banner)');
   expect((text.match(/\blive\b/g) ?? []).length >= 2, 'both vault cards show the live badge from chain');
+  expect(!dep.pool || (text.includes('liquid staking') && !text.includes('coming soon')), 'the kVARA pool card is live from chain');
   expect(/(Rate|Share price)\s*\n?\s*1\.0\d{3}/.test(text), 'rate is read from the vault program');
-  expect(/7\.9%/.test(text) && /8\.4%/.test(text), 'APY comes from the program config');
+  expect(/7\.9%/.test(text) && /8\.4%/.test(text) && (!dep.pool || /35\.0%/.test(text)), 'APY comes from the program config');
   expect(/block [\d,]+/.test(text), 'network card shows the latest block');
   expect(!text.includes('simulation'), 'no simulation badge in gear mode');
   await page.screenshot({ path: 'screenshots/ui-check-vaults.png', fullPage: true });
   await page.goto(`http://localhost:${PORT}/app`);
   await page.waitForTimeout(1500);
   const stake = await page.innerText('body');
-  expect(stake.includes('You stake') && /\bUSDT\b/.test(stake) && !/Asset: VARA/.test(stake), 'stake page starts on a live stable pool (VARA staking not offered on chain)');
+  expect(stake.includes('You stake') && (dep.pool ? /\bVARA\b/.test(stake) && /35\.0%/.test(stake) : /\bUSDT\b/.test(stake)), dep.pool ? 'stake page starts on the kVARA pool with the on-chain APY' : 'stake page starts on a live stable pool (no kVARA pool configured)');
   await page.goto(`http://localhost:${PORT}/app/settings`);
   await page.waitForTimeout(1200);
   const settings = await page.innerText('body');

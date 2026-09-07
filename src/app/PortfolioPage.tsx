@@ -36,7 +36,7 @@ export function PortfolioPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div className="ap-grid-4">
         <Bento variant="app" pad={20}><Stat label="Total value" value={formatUsd(totalUsd)} size="sm" gradient loading={loading} /></Bento>
-        <Bento variant="app" pad={20}><Stat label="Staked" value={`${balances ? formatVara(balances.kVARA) : '0.00'} kVARA`} size="sm" mono sub={adapter.stakingLive ? `≈ ${formatVara(stakedV)} VARA` : 'coming soon on mainnet'} loading={loading} /></Bento>
+        <Bento variant="app" pad={20}><Stat label="Staked" value={`${balances ? formatVara(balances.kVARA) : '0.00'} kVARA`} size="sm" mono sub={adapter.stakingLive ? `≈ ${formatVara(stakedV)} VARA` : 'pool not configured'} loading={loading} /></Bento>
         <Bento variant="app" pad={20}><Stat label="In vaults" value={formatUsd(stableUsd)} size="sm" mono loading={loading} /></Bento>
         <Bento variant="app" pad={20}><Stat label="Unbonding" value={unbondingLabel} size="sm" mono sub={unbonding.length ? `claimable in ${formatCountdown(Math.min(...unbonding.map((u) => u.claimableAt)) - now)}` : '—'} loading={loading} /></Bento>
       </div>

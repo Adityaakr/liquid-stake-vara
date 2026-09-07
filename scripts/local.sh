@@ -27,13 +27,14 @@ else
   echo "local node already running"
 fi
 
-echo "deploying seeded programs (unbond ${UNBOND:-120}s, faucet cooldown ${COOLDOWN:-60}s, seed ${SEED:-250000} tokens per vault)"
+echo "deploying seeded programs (unbond ${UNBOND:-120}s, faucet cooldown ${COOLDOWN:-60}s, seed ${SEED:-250000} tokens per vault, ${STAKE:-918270000} VARA in the kVARA pool)"
 DEPLOYER_SEED='//Alice' node node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.app.json scripts/deploy.ts \
-  --rpc "$RPC" --unbond "${UNBOND:-120}" --cooldown "${COOLDOWN:-60}" --fund 10 --seed "${SEED:-250000}" --env .env.local | tail -12
+  --rpc "$RPC" --unbond "${UNBOND:-120}" --cooldown "${COOLDOWN:-60}" --fund 10 --seed "${SEED:-250000}" \
+  --stake "${STAKE:-918270000}" --rewards "${REWARDS:-100000}" --env .env.local | tail -16
 
 echo
 echo "starting the app on http://localhost:5173/app/vaults (log: $LOG_DIR/app.log)"
 pkill -f "vite.js" 2>/dev/null || true   # an older dev server would keep stale env values
 nohup node node_modules/vite/bin/vite.js --port 5173 --strictPort > "$LOG_DIR/app.log" 2>&1 &
 sleep 2
-echo "ready. Connect a Polkadot.js or SubWallet account, press 'Get 100 VARA for fees', then use the faucet and deposit."
+echo "ready. Connect a Polkadot.js or SubWallet account, press 'Get 100 VARA for fees', then stake VARA or use the faucet and deposit."

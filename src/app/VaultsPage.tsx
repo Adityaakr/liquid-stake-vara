@@ -123,7 +123,7 @@ function VaultCard({ card }: { card: Card }) {
             <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>{isVara ? 'liquid staking pool' : 'stable vault'}</span>
           </div>
         </div>
-        {!card.live ? <Badge tone="info" size="sm">coming soon</Badge> : card.paused ? <Badge tone="warn" size="sm">paused</Badge> : <Badge tone={isVara ? 'accent' : 'ok'} size="sm">{isVara ? 'liquid staking' : 'live'}</Badge>}
+        {!card.live ? <Badge tone="info" size="sm">not configured</Badge> : card.paused ? <Badge tone="warn" size="sm">paused</Badge> : <Badge tone={isVara ? 'accent' : 'ok'} size="sm">{isVara ? 'liquid staking' : 'live'}</Badge>}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, margin: '22px 0 16px' }}>
         <Stat label={isVara ? 'Staking APY' : 'Deposit APY'} value={apy} size="sm" gradient loading={!stats} />
@@ -263,8 +263,8 @@ export function VaultsPage() {
     rate: stats?.rate ?? 1_000_000_000n,
     at,
     tvlUsd: stats ? (Number(stats.totalStakedVara) / 10 ** VARA_DECIMALS) * stats.varaPriceUsd : 0,
-    feeBps: INSTANT_UNSTAKE_FEE_BPS,
-    unbondSecs: UNBONDING_DAYS * 86_400,
+    feeBps: stats?.stakeFeeBps ?? INSTANT_UNSTAKE_FEE_BPS,
+    unbondSecs: stats?.stakeUnbondSecs ?? UNBONDING_DAYS * 86_400,
     minDeposit: 0n,
     paused: false,
     live: adapter.stakingLive,

@@ -109,6 +109,8 @@ export class MockAdapter implements StakingAdapter {
     return {
       rate: this.rateAt(now),
       stakeApyBps: APY_BPS,
+      stakeFeeBps: INSTANT_UNSTAKE_FEE_BPS,
+      stakeUnbondSecs: UNBONDING_MS / 1000,
       vaults: { USDT: this.vaultStats('USDT', now), USDC: this.vaultStats('USDC', now) },
       tvlUsd: (Number(STAKED_VARA) / Number(ONE_VARA)) * VARA_PRICE_USD + VAULT_TVL.USDT + VAULT_TVL.USDC,
       totalStakedVara: STAKED_VARA,

@@ -24,6 +24,9 @@ export type ProtocolStats = {
   /** kVARA -> VARA exchange rate, scaled 1e9 */
   rate: bigint;
   stakeApyBps: bigint;
+  /** kVARA instant exit fee and unbond period as the pool reports them. */
+  stakeFeeBps: bigint;
+  stakeUnbondSecs: number;
   vaults: Record<VaultAsset, VaultStats>;
   tvlUsd: number;
   totalStakedVara: bigint;
@@ -100,7 +103,7 @@ export interface StakingAdapter {
   readonly simulated: boolean;
   /** true when the vault programs are configured and reachable */
   readonly deployed: boolean;
-  /** true when native VARA staking can be used (false on mainnet until the validator integration ships) */
+  /** true when the kVARA pool program is configured, so native VARA can be staked */
   readonly stakingLive: boolean;
   getStats(): Promise<ProtocolStats>;
   getBalances(address: string): Promise<Balances>;

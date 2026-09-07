@@ -1,12 +1,13 @@
 import type { HexString } from '@gear-js/api';
-import { ONE_STABLE, RATE_SCALE, VAULT_ASSETS, type VaultAsset } from '@/domain/protocol';
+import { ONE_STABLE, ONE_VARA, RATE_SCALE, VAULT_ASSETS, type VaultAsset } from '@/domain/protocol';
 import { NETWORKS, txLink } from './networks';
 import { APP_NAME } from './wallet';
-import { GAS, readPrograms, type ProgramSet } from './config';
-import { STAKED_VARA, VARA_APY_BPS, VARA_PRICE_USD, VARA_TVL_USD, varaRateAt, varaRateHistory } from './varaPool';
+import { GAS, readPool, readPrograms, type ProgramSet } from './config';
+import { STAKED_VARA, VARA_APY_BPS, VARA_PRICE_USD, VARA_TVL_USD, varaRateAt } from './varaPool';
 import { ChainError, type Balances, type FaucetInfo, type NetworkId, type DepositAsset, type ProtocolStats, type SessionInfo, type StakingAdapter, type TxResult, type UnbondEntry, type VaultStats } from './types';
 import type { DemoToken } from './idl/demo_token';
 import type { Vault } from './idl/vault';
+import type { VaraPool } from './idl/vara_pool';
 
 type GearApiT = import('@gear-js/api').GearApi;
 type TxBuilder<T> = import('sails-js').TransactionBuilderWithHeader<T>;
@@ -23,6 +24,7 @@ const RATE_1E18_TO_1E9 = 1_000_000_000n;
 const viteEnv: Record<string, string | undefined> = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
 const STABLE_PRICE_USD = 1;
 const POLL_MS = 12_000;
+const BLOCK_SECS = 3;
 
 async function extensionSigner(address: string): Promise<Signer> {
   const { web3Enable, web3FromAddress } = await import('@polkadot/extension-dapp');
@@ -47,6 +49,7 @@ function randomSeed(): `0x${string}` {
   return `0x${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
 }
 const SESSION_ACTIONS = ['Deposit', 'Redeem', 'Unbond', 'Claim'] as const;
+const POOL_SESSION_ACTIONS = ['Unstake', 'Unbond', 'Claim'] as const;
 /** Smallest VARA balance a session key needs to send a vault command (10 VARA reserve + 1 for the account). */
 export const SESSION_MIN_GAS = 11n * 10n ** 12n;
 /** Default VARA moved to a fresh session key: room for a handful of actions before a top up. */
@@ -66,6 +69,8 @@ export function describeProgramError(err: unknown): string {
     InsufficientShares: 'Not enough receipt tokens',
     InsufficientBalance: 'Not enough balance',
     InsufficientAllowance: 'The vault is not approved to spend this amount',
+    InsufficientReserve: 'The pool reserve cannot cover this payout yet. Try a smaller amount or unbond',
+    TransferFailed: 'The payout could not be sent; your position is unchanged',
     Unauthorized: 'Only the admin may do that',
     UnbondNotFound: 'That unbond entry no longer exists',
     UnbondNotReady: 'The unbonding period has not ended',
@@ -112,23 +117,25 @@ function userMessage(e: unknown): ChainError {
 }
 
 /**
- * Talks to the Vale Protocol programs on Vara through the generated sails-js clients.
- * Native VARA staking is not live yet: those calls fail with NOT_DEPLOYED.
+ * Talks to the Vale Protocol programs on Vara through the generated sails-js clients: the
+ * kVARA pool for native staking and one vault per demo stable.
  */
 export class GearAdapter implements StakingAdapter {
   readonly kind = 'gear' as const;
   readonly simulated = false;
-  readonly stakingLive = false;
   readonly programs: Partial<Record<VaultAsset, ProgramSet>>;
+  /** The kVARA pool program, when configured. */
+  readonly pool?: HexString;
   private api: Promise<GearApiT> | null = null;
   private listeners = new Set<() => void>();
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     readonly network: NetworkId = 'mainnet',
-    private opts: { programs?: Partial<Record<VaultAsset, ProgramSet>>; rpc?: string; signer?: SignerProvider; devFunder?: string } = {},
+    private opts: { programs?: Partial<Record<VaultAsset, ProgramSet>>; pool?: HexString; rpc?: string; signer?: SignerProvider; devFunder?: string } = {},
   ) {
     this.programs = opts.programs ?? readPrograms();
+    this.pool = opts.pool ?? readPool();
     const rpc = opts.rpc ?? NETWORKS[network].rpc;
     const funder = opts.devFunder ?? viteEnv.VITE_DEV_FUNDER_SURI;
     // Only ever on a local chain: a dev seed in the browser is fine there and nowhere else.
@@ -150,6 +157,7 @@ export class GearAdapter implements StakingAdapter {
   }
 
   get deployed() { return VAULT_ASSETS.every((a) => !!this.programs[a]); }
+  get stakingLive() { return !!this.pool; }
 
   private async connect(): Promise<GearApiT> {
     if (!this.api) {
@@ -167,6 +175,14 @@ export class GearAdapter implements StakingAdapter {
     const api = await this.connect();
     const [{ DemoToken }, { Vault }] = await Promise.all([import('./idl/demo_token'), import('./idl/vault')]);
     return { token: new DemoToken(api, ids.token), vault: new Vault(api, ids.vault) };
+  }
+
+  /** Generated client for the kVARA pool, or a NOT_DEPLOYED error when it is not configured. */
+  private async poolClient(): Promise<VaraPool> {
+    if (!this.pool) throw new ChainError(`Native VARA staking is not deployed on ${NETWORKS[this.network].label} yet. Use the USDC and USDT vaults.`, 'NOT_DEPLOYED');
+    const api = await this.connect();
+    const { VaraPool } = await import('./idl/vara_pool');
+    return new VaraPool(api, this.pool);
   }
 
   private async hex(address: string): Promise<HexString> {
@@ -212,11 +228,11 @@ export class GearAdapter implements StakingAdapter {
   async getSession(address: string): Promise<SessionInfo | null> {
     const stored = loadSessions()[address];
     if (!stored) return null;
-    const asset = VAULT_ASSETS.find((a) => this.programs[a]);
-    if (!asset) return null;
-    const { vault } = await this.programsFor(asset);
     const who = await this.hex(address);
-    const onChain = await vault.vault.session(who).call();
+    const asset = VAULT_ASSETS.find((a) => this.programs[a]);
+    if (!asset && !this.pool) return null;
+    // Every program registers the same key; any one of them answers for the session.
+    const onChain = asset ? await (await this.programsFor(asset)).vault.vault.session(who).call() : await (await this.poolClient()).pool.session(who).call();
     if (!onChain || big(onChain.expires_at) <= BigInt(Date.now())) return null;
     const { decodeAddress } = await import('@gear-js/api');
     if (decodeAddress(stored.key) !== onChain.key) return null; // a session from another device is not usable here
@@ -227,7 +243,8 @@ export class GearAdapter implements StakingAdapter {
 
   /**
    * One wallet signature for everything the session needs: unlimited approvals for both vaults,
-   * a session key registered in both vaults, and a VARA transfer so the key can pay fees.
+   * a session key registered in both vaults and the kVARA pool, and a VARA transfer so the key
+   * can pay fees.
    */
   async enableSession(address: string, opts: { hours: number; gasVara: number }): Promise<TxResult & { session: SessionInfo }> {
     const api = await this.connect();
@@ -244,6 +261,11 @@ export class GearAdapter implements StakingAdapter {
       const { token, vault } = await this.programsFor(asset);
       calls.push(token.vft.approve(ids.vault, 2n ** 256n - 1n).withAccount(address).withGas(GAS.token).extrinsic);
       calls.push(vault.vault.createSession(keyHex, durationSecs, actions).withAccount(address).withGas(GAS.vaultSync).extrinsic);
+    }
+    if (this.pool) {
+      const pool = await this.poolClient();
+      // Staking needs the owner's VARA, so the key only ever exits or claims for the owner.
+      calls.push(pool.pool.createSession(keyHex, durationSecs, [...POOL_SESSION_ACTIONS] as import('./idl/vara_pool').SessionAction[]).withAccount(address).withGas(GAS.pool).extrinsic);
     }
     calls.push(api.tx.balances.transferKeepAlive(pair.address, BigInt(Math.round(opts.gasVara * 1e12))));
     const signer = await (this.opts.signer ?? extensionSigner)(address);
@@ -272,6 +294,7 @@ export class GearAdapter implements StakingAdapter {
       const { vault } = await this.programsFor(asset);
       calls.push(vault.vault.revokeSession().withAccount(address).withGas(GAS.vaultSync).extrinsic);
     }
+    if (this.pool) calls.push((await this.poolClient()).pool.revokeSession().withAccount(address).withGas(GAS.pool).extrinsic);
     const signer = await (this.opts.signer ?? extensionSigner)(address);
     const hash = await new Promise<string>((resolve, reject) => {
       const tx = api.tx.utility.batchAll(calls);
@@ -313,23 +336,43 @@ export class GearAdapter implements StakingAdapter {
     };
   }
 
+  /** The kVARA pool as the program reports it; the published figures stand in until it is deployed. */
+  private async poolStats(now: number): Promise<{ rate: bigint; apyBps: bigint; staked: bigint; tvlUsd: number; feeBps: bigint; unbondSecs: number; reserve: bigint }> {
+    if (!this.pool) return { rate: varaRateAt(now), apyBps: VARA_APY_BPS, staked: STAKED_VARA, tvlUsd: VARA_TVL_USD, feeBps: 30n, unbondSecs: 7 * 86_400, reserve: 0n };
+    const info = await (await this.poolClient()).pool.info().call();
+    const staked = big(info.total_assets);
+    return {
+      rate: big(info.rate) / RATE_1E18_TO_1E9,
+      apyBps: BigInt(num(info.apy_bps)),
+      staked,
+      tvlUsd: (Number(staked) / Number(ONE_VARA)) * VARA_PRICE_USD,
+      feeBps: BigInt(num(info.instant_fee_bps)),
+      unbondSecs: num(info.unbond_period_secs),
+      reserve: big(info.reserve),
+    };
+  }
+
   async getStats(): Promise<ProtocolStats> {
     const api = await this.connect();
-    const [header, ...stats] = await Promise.all([api.rpc.chain.getHeader(), ...VAULT_ASSETS.map((a) => this.vaultStats(a))]);
+    const now = Date.now();
+    const [header, pool, ...stats] = await Promise.all([api.rpc.chain.getHeader(), this.poolStats(now), ...VAULT_ASSETS.map((a) => this.vaultStats(a))]);
     const empty: VaultStats = { rate: RATE_SCALE, apyBps: 0n, instantFeeBps: 0n, unbondSecs: 0, minDeposit: 0n, totalShares: 0n, totalAssets: 0n, holdings: 0n, tvlUsd: 0, paused: true };
     const vaults = Object.fromEntries(VAULT_ASSETS.map((a, i) => [a, stats[i] ?? empty])) as Record<VaultAsset, VaultStats>;
     const blockNumber = header.number.toNumber();
-    const now = Date.now();
+    // The rate compounds every block (3s): the timeline shows the last three blocks' rates.
+    const rateBlocksAgo = (n: number) => pool.rate - (pool.rate * pool.apyBps * BigInt(n * BLOCK_SECS)) / (10_000n * 31_536_000n);
     return {
-      rate: varaRateAt(now),
-      stakeApyBps: VARA_APY_BPS,
+      rate: pool.rate,
+      stakeApyBps: pool.apyBps,
+      stakeFeeBps: pool.feeBps,
+      stakeUnbondSecs: pool.unbondSecs,
       vaults,
-      tvlUsd: VARA_TVL_USD + VAULT_ASSETS.reduce((s, a) => s + vaults[a].tvlUsd, 0),
-      totalStakedVara: STAKED_VARA,
-      bufferBps: 720n,
+      tvlUsd: pool.tvlUsd + VAULT_ASSETS.reduce((s, a) => s + vaults[a].tvlUsd, 0),
+      totalStakedVara: pool.staked,
+      bufferBps: pool.staked > 0n ? (pool.reserve * 10_000n) / pool.staked : 0n,
       era: blockNumber,
-      eraEndsAt: now,
-      rateHistory: varaRateHistory(now),
+      eraEndsAt: now + BLOCK_SECS * 1000,
+      rateHistory: [2, 1, 0].map((n) => ({ era: blockNumber - n, rate: rateBlocksAgo(n) })),
       varaPriceUsd: VARA_PRICE_USD,
       at: now,
       blockNumber,
@@ -341,6 +384,7 @@ export class GearAdapter implements StakingAdapter {
     const who = await this.hex(address);
     const vara = await api.balance.findOut(address);
     const out: Balances = { VARA: vara.toBigInt(), kVARA: 0n, USDT: 0n, USDC: 0n, kUSDT: 0n, kUSDC: 0n };
+    if (this.pool) out.kVARA = big(await (await this.poolClient()).vft.balanceOf(who).call());
     await Promise.all(VAULT_ASSETS.map(async (asset) => {
       if (!this.programs[asset]) return;
       const { token, vault } = await this.programsFor(asset);
@@ -359,6 +403,10 @@ export class GearAdapter implements StakingAdapter {
       const entries = await vault.vault.unbonds(who).call();
       return entries.map((u) => ({ id: String(u.id), asset, amount: big(u.assets), startedAt: num(u.requested_at), claimableAt: num(u.claimable_at) }));
     }));
+    if (this.pool) {
+      const entries = await (await this.poolClient()).pool.unbonds(who).call();
+      lists.push(entries.map((u) => ({ id: String(u.id), asset: 'VARA' as const, amount: big(u.assets), startedAt: num(u.requested_at), claimableAt: num(u.claimable_at) })));
+    }
     return lists.flat().sort((a, b) => a.claimableAt - b.claimableAt);
   }
 
@@ -374,15 +422,28 @@ export class GearAdapter implements StakingAdapter {
     return out;
   }
 
-  // --- native staking (not live) ---------------------------------------------
+  // --- native staking: the kVARA pool ------------------------------------------
 
-  private notLive(): never {
-    throw new ChainError('Native VARA staking is not live on mainnet yet. Use the USDC and USDT vaults.', 'NOT_DEPLOYED');
+  /** Stake VARA: the amount travels as the message value, so the owner's wallet always signs. */
+  async stake(address: string, vara: bigint): Promise<TxResult & { shares?: bigint }> {
+    const pool = await this.poolClient();
+    const r = await this.send(pool.pool.stake().withValue(vara), address, GAS.pool);
+    return { hash: r.hash, blockNumber: r.blockNumber, link: r.link, shares: big(unwrap(r.result)) };
   }
-  stake(): Promise<TxResult> { return Promise.reject(this.safeNotLive()); }
-  unstakeInstant(): Promise<TxResult> { return Promise.reject(this.safeNotLive()); }
-  unstakeNative(): Promise<TxResult> { return Promise.reject(this.safeNotLive()); }
-  private safeNotLive(): ChainError { try { this.notLive(); } catch (e) { return e as ChainError; } return new ChainError('unreachable'); }
+
+  async unstakeInstant(address: string, kvara: bigint): Promise<TxResult & { net?: bigint; fee?: bigint }> {
+    const pool = await this.poolClient();
+    const r = await this.send(pool.pool.unstake(kvara), address, GAS.pool, true);
+    const out = unwrap(r.result);
+    return { hash: r.hash, blockNumber: r.blockNumber, link: r.link, net: big(out.net), fee: big(out.fee) };
+  }
+
+  async unstakeNative(address: string, kvara: bigint): Promise<TxResult & { amount?: bigint; claimableAt?: number }> {
+    const pool = await this.poolClient();
+    const r = await this.send(pool.pool.requestUnbond(kvara), address, GAS.pool, true);
+    const out = unwrap(r.result);
+    return { hash: r.hash, blockNumber: r.blockNumber, link: r.link, amount: big(out.assets), claimableAt: num(out.claimable_at) };
+  }
 
   // --- vaults -----------------------------------------------------------------
 
@@ -421,7 +482,12 @@ export class GearAdapter implements StakingAdapter {
   }
 
   async claimUnbond(address: string, asset: DepositAsset, id: string): Promise<TxResult> {
-    if (asset === 'VARA') this.notLive();
+    if (asset === 'VARA') {
+      const pool = await this.poolClient();
+      const r = await this.send(pool.pool.claim(Number(id)), address, GAS.pool, true);
+      unwrap(r.result);
+      return r;
+    }
     const { vault } = await this.programsFor(asset);
     const r = await this.send(vault.vault.claim(Number(id)), address, GAS.vaultAsync, true);
     unwrap(r.result);

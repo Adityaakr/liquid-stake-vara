@@ -36,7 +36,7 @@ export function StakePage() {
   const { openWallet } = useOutletContext<AppOutlet>();
   const { stats, statsError, balances, balancesError, account, adapter, tx, run } = useStore();
   const [tab, setTab] = useState<Tab>('Stake');
-  // On chain, native VARA staking is not live yet: the picker starts on the first live pool.
+  // Without a kVARA pool program configured, the picker starts on the first live stable pool.
   const order: DepositAsset[] = adapter.stakingLive ? ['VARA', 'USDT', 'USDC'] : ['USDT', 'USDC'];
   const [asset, setAsset] = useState<DepositAsset>(order[0]);
   const [amt, setAmt] = useState('');
@@ -62,13 +62,17 @@ export function StakePage() {
     if (!rate || !parsed) return { main: 0n, fee: 0n };
     if (tab === 'Stake') return { main: assetsToShares(parsed, rate), fee: 0n };
     const gross = sharesToAssets(parsed, rate);
-    if (path === 'instant') { const fee = (gross * INSTANT_UNSTAKE_FEE_BPS) / BPS; return { main: gross - fee, fee }; }
+    const feeBps = stats ? (isVara ? stats.stakeFeeBps : stats.vaults[asset].instantFeeBps) : INSTANT_UNSTAKE_FEE_BPS;
+    if (path === 'instant') { const fee = (gross * feeBps) / BPS; return { main: gross - fee, fee }; }
     return { main: gross, fee: 0n };
-  }, [rate, parsed, tab, path]);
+  }, [rate, parsed, tab, path, stats, isVara, asset]);
 
-  const unbondSecs = !isVara && stats ? stats.vaults[asset].unbondSecs : 7 * 86_400;
+  const unbondSecs = stats ? (isVara ? stats.stakeUnbondSecs : stats.vaults[asset].unbondSecs) : 7 * 86_400;
   const unbondLabel = unbondSecs >= 86_400 ? `${Math.round(unbondSecs / 86_400)} days` : unbondSecs >= 3600 ? `${Math.round(unbondSecs / 3600)} h` : `${Math.max(1, Math.round(unbondSecs / 60))} min`;
   const price = isVara ? stats?.varaPriceUsd ?? 0 : 1;
+  // On chain the rate compounds every block; the simulation compounds per era.
+  const onChain = stats?.blockNumber !== undefined;
+  const period = onChain ? 'block' : 'era';
   const usd = (v: bigint) => formatUsd(toNumber(v, decimals) * price);
   const busy = tx.stage === 'broadcast';
 
@@ -89,7 +93,7 @@ export function StakePage() {
     } else if (path === 'instant') {
       ok = await run('Instant unstake', (addr) => adapter.unstakeInstant(addr, a), { title: 'Unstaked instantly', detail: `${fmt(out.main)} VARA received · 0.3% fee applied.` });
     } else {
-      ok = await run('Native unbond', (addr) => adapter.unstakeNative(addr, a), { title: 'Unbond started', detail: `${fmt(out.main)} VARA claimable in 7 days at full rate.` });
+      ok = await run('Native unbond', (addr) => adapter.unstakeNative(addr, a), { title: 'Unbond started', detail: `${fmt(out.main)} VARA claimable in ${unbondLabel} at full rate.` });
     }
     if (ok) reset();
   };
@@ -166,10 +170,10 @@ export function StakePage() {
         <Bento variant="app" pad={20}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: 15, fontWeight: 600, fontFamily: 'var(--font-display)' }}>Next compound</span>
-            <Badge size="sm" tone="info">era {stats ? stats.era.toLocaleString('en-US') : '—'}</Badge>
+            <Badge size="sm" tone="info">{period} {stats ? stats.era.toLocaleString('en-US') : '—'}</Badge>
           </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 10 }}>
-            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 25 }}>{stats ? formatCountdown(stats.eraEndsAt - now) : '…'}</span>
+            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 25 }}>{stats ? (onChain ? 'every block' : formatCountdown(stats.eraEndsAt - now)) : '…'}</span>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-3)' }}>rate {stats ? formatRate(stats.rate) : '—'}</span>
           </div>
           <div style={{ position: 'relative', margin: '26px 4px 6px' }}>
@@ -181,7 +185,7 @@ export function StakePage() {
                   <div key={h.era} style={{ textAlign: 'center', position: 'relative' }}>
                     {hot && stats ? <span style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', top: -26, fontFamily: 'var(--font-mono)', fontSize: 10.5, background: '#fff', border: '1px solid var(--accent-line)', borderRadius: 7, padding: '2px 7px', color: 'var(--fx-indigo)', whiteSpace: 'nowrap' }}>{formatRate(h.rate)}</span> : null}
                     <div style={{ width: 12, height: 12, borderRadius: 99, margin: '0 auto', background: hot ? 'var(--fx-indigo)' : 'var(--ink-600)', border: '2px solid #fff' }} />
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', marginTop: 7 }}>era {stats ? h.era.toLocaleString('en-US') : '—'}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-3)', marginTop: 7 }}>{period} {stats ? h.era.toLocaleString('en-US') : '—'}</div>
                   </div>
                 );
               })}
