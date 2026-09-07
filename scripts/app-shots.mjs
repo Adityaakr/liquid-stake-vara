@@ -1,6 +1,7 @@
 // Regenerates the dashboard screenshots the landing/product pages embed (public/fx/app-*.jpg).
 // Desktop captures at 1400px and phone captures at 390px, both at 2x for crisp rendering.
-// Usage: pnpm build && node scripts/app-shots.mjs
+// Usage: VITE_ADAPTER=mock VITE_VARA_RPC=wss://rpc.vara.network pnpm build && node scripts/app-shots.mjs
+// (the marketing captures show the simulation on mainnet, whatever .env.local says)
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 const root = new URL('..', import.meta.url).pathname;

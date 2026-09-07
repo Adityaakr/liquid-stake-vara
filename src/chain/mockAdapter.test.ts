@@ -96,7 +96,7 @@ describe('MockAdapter accrual', () => {
     const before = await clock.getStats();
     t = T0 + 365 * 24 * 3600 * 1000;
     const after = await clock.getStats();
-    expect(after.rate).toBe(before.rate + (before.rate * 1420n) / 10_000n);
+    expect(after.rate).toBe(before.rate + (before.rate * 3500n) / 10_000n);
     expect(after.vaults.USDT.rate).toBe(before.vaults.USDT.rate + (before.vaults.USDT.rate * 840n) / 10_000n);
     expect(after.at).toBe(t);
   });

@@ -18,7 +18,8 @@ const ERA_MS = 12 * 60 * 60 * 1000;
 export const T0 = Date.UTC(2026, 8, 1);
 const BASE_ERA = 4182;
 const BASE_RATE = parseRate('1.0482');
-const APY_BPS = 1420n;
+/** kVARA compounds native staking rewards; the simulated pool realises ~35% APY. */
+const APY_BPS = 3500n;
 
 const VAULT_APY: Record<VaultAsset, bigint> = { USDT: 840n, USDC: 790n };
 const VAULT_BASE_PRICE: Record<VaultAsset, bigint> = { USDT: parseRate('1.0261'), USDC: parseRate('1.0193') };
