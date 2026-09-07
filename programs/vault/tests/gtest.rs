@@ -83,7 +83,7 @@ async fn setup() -> World {
     let vault = env
         .deploy::<VaultClientProgram>(vault_code, b"kusdc".to_vec())
         // APY starts at zero so share math in the tests is exact; accrual tests switch it on.
-        .new(token.id(), "Vale kUSDC".into(), "kUSDC".into(), 6, 0, FEE_BPS, UNBOND_SECS)
+        .new(token.id(), "Vale kUSDC".into(), "kUSDC".into(), 6, 0, FEE_BPS, UNBOND_SECS, U256::zero())
         .await
         .unwrap();
     // Programs need balance to pay for the messages they send.

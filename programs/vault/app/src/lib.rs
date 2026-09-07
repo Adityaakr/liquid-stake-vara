@@ -178,7 +178,7 @@ pub struct VaultState {
 }
 
 impl VaultState {
-    pub fn new(admin: ActorId, underlying: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, now_ms: u64) -> Self {
+    pub fn new(admin: ActorId, underlying: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, initial_rate: U256, now_ms: u64) -> Self {
         Self {
             admin,
             underlying,
@@ -188,7 +188,8 @@ impl VaultState {
             total_shares: U256::zero(),
             balances: BTreeMap::new(),
             allowances: BTreeMap::new(),
-            rate: SCALE,
+            // A pool that starts at a rate above 1.0 continues where an earlier pool left off.
+            rate: if initial_rate < SCALE { SCALE } else { initial_rate },
             last_accrual_ms: now_ms,
             apy_bps,
             instant_fee_bps,
@@ -934,9 +935,10 @@ pub struct Program {
 #[sails_rs::program]
 impl Program {
     // Deploy a vault over `underlying`. The deployer becomes admin and must be granted the
-    // minter role on the underlying so realised yield can be minted.
-    pub fn new(underlying: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> Self {
-        let state = VaultState::new(Syscall::message_source(), underlying, name, symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs, Syscall::block_timestamp());
+    // minter role on the underlying so realised yield can be minted. `initial_rate` (1e18
+    // scale, 0 = 1.0) is the share price the vault starts at, for a vault that continues an earlier one.
+    pub fn new(underlying: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, initial_rate: U256) -> Self {
+        let state = VaultState::new(Syscall::message_source(), underlying, name, symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs, initial_rate, Syscall::block_timestamp());
         Self { state: RefCell::new(state) }
     }
 
@@ -959,7 +961,7 @@ mod tests {
     const T0: u64 = 1_700_000_000_000;
 
     fn vault(apy_bps: u32) -> VaultState {
-        VaultState::new(a(1), a(99), "k".into(), "kUSDC".into(), 6, apy_bps, 30, 7 * 86_400, T0)
+        VaultState::new(a(1), a(99), "k".into(), "kUSDC".into(), 6, apy_bps, 30, 7 * 86_400, U256::zero(), T0)
     }
 
     #[test]
@@ -1110,6 +1112,15 @@ mod tests {
         assert!(v.revoke_session(a(2)).is_some());
         assert!(v.revoke_session(a(2)).is_none());
         assert_eq!(v.actor_for(a(10), SessionAction::Deposit, T0 + 1).unwrap(), a(10));
+    }
+
+    #[test]
+    fn initial_rate_applies_from_the_start() {
+        let mut v = VaultState::new(a(1), a(99), "k".into(), "kUSDT".into(), 6, 840, 30, 7 * 86_400, SCALE + SCALE * 18 / 100, T0);
+        assert_eq!(v.rate, SCALE + SCALE * 18 / 100, "starts at 1.18");
+        assert_eq!(v.check_deposit(u(1_180_000)).unwrap(), u(1_000_000));
+        let below = VaultState::new(a(1), a(99), "k".into(), "kUSDT".into(), 6, 0, 30, 60, SCALE / 2, T0);
+        assert_eq!(below.rate, SCALE, "a rate below 1.0 is clamped");
     }
 
     #[test]

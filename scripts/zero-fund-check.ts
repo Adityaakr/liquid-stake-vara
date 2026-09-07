@@ -12,7 +12,7 @@ async function main() {
   const wasm = readFileSync('programs/vault/target/wasm32-gear/release/vault.opt.wasm');
   const token = new DemoToken(api, dep.programs.USDC.token);
   const vault = new Vault(api);
-  const t = await vault.newCtorFromCode(wasm, dep.programs.USDC.token, 'zero fund', 'zUSDC', 6, 100_000, 0, 30).withAccount(alice).withGas(150_000_000_000n).signAndSend();
+  const t = await vault.newCtorFromCode(wasm, dep.programs.USDC.token, 'zero fund', 'zUSDC', 6, 100_000, 0, 30, 0n).withAccount(alice).withGas(150_000_000_000n).signAndSend();
   await t.response();
   console.log('vault', vault.programId, 'balance', (await api.balance.findOut(vault.programId)).toString());
   await (await token.admin.grantMinter(vault.programId).withAccount(alice).withGas(30_000_000_000n).signAndSend()).response();

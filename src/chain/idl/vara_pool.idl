@@ -247,7 +247,7 @@ service Pool@0xd332ff105e32f471 {
 
 program VaraPool {
     constructors {
-        New(name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64);
+        New(name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, initial_rate: U256);
     }
     services {
         Vft@0x72760694e848b0e7,

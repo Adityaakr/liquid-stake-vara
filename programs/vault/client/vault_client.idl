@@ -250,7 +250,7 @@ service Vault@0x535c61105b77a62a {
 
 program VaultClient {
     constructors {
-        New(underlying: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64);
+        New(underlying: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, initial_rate: U256);
     }
     services {
         Vft@0xb938c6ed1b8ca8d0,

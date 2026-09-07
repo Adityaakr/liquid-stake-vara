@@ -62,7 +62,7 @@ async fn setup() -> World {
     let code = env.system().submit_code(::vara_pool::WASM_BINARY);
     let pool = env
         .deploy::<VaraPoolClientProgram>(code, b"kvara".to_vec())
-        .new("Vale kVARA".into(), "kVARA".into(), 12, 0, FEE_BPS, UNBOND_SECS)
+        .new("Vale kVARA".into(), "kVARA".into(), 12, 0, FEE_BPS, UNBOND_SECS, U256::zero())
         .await
         .unwrap();
     // Programs need balance to pay for the messages they send.
@@ -260,4 +260,23 @@ async fn session_key_acts_for_its_owner() {
     assert_eq!(res, Err(pool::PoolError::SessionNotAllowed));
     assert!(w.pool_as(BOB).pool().revoke_session().await.unwrap());
     assert_eq!(w.pool.pool().session(actor(BOB)).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn pool_can_start_at_a_higher_rate() {
+    let env = GtestEnv::system_default();
+    env.system().mint_to(BOB, DEFAULT_USERS_INITIAL_BALANCE);
+    let code = env.system().submit_code(::vara_pool::WASM_BINARY);
+    let start = U256::from(SCALE + SCALE / 20); // 1.05
+    let pool = env
+        .deploy::<VaraPoolClientProgram>(code, b"kvara-105".to_vec())
+        .new("Vale kVARA".into(), "kVARA".into(), 12, 0, FEE_BPS, UNBOND_SECS, start)
+        .await
+        .unwrap();
+    env.system().transfer(ALICE, pool.id(), 100 * ONE, true);
+    assert_eq!(pool.pool().rate().await.unwrap(), start);
+    let bob = Actor::new(user_env(&env, BOB), pool.id());
+    let shares = bob.pool().stake().with_value(105 * ONE).await.unwrap().unwrap();
+    assert_eq!(shares, u(100 * ONE), "105 VARA buys 100 kVARA at 1.05");
+    assert_eq!(pool.pool().position(actor(BOB)).await.unwrap().assets, u(105 * ONE));
 }

@@ -107,9 +107,11 @@ per cooldown.
 
 ### Vault (`Vft`, `Vault`)
 
-Rate based shares, ERC-4626 shape. `rate` is assets per share scaled by 1e18, starts at 1.0 so
-the first deposit is 1:1, accrues at the configured APY every second and is checkpointed on each
-state changing call.
+Rate based shares, ERC-4626 shape. `rate` is assets per share scaled by 1e18, accrues at the
+configured APY every second and is checkpointed on each state changing call. It starts at the
+constructor's `initial_rate` (0 means 1.0, so the first deposit is 1:1); a pool that continues an
+earlier one starts at that pool's last rate. `pnpm deploy` uses the published rates for the day
+unless `--fresh` is passed.
 
 - `Deposit(assets)` pulls the underlying with `TransferFrom` and mints shares.
 - `Redeem(shares)` burns shares and pays assets at the current rate minus the instant fee. When
@@ -147,7 +149,7 @@ node, a stake or unstake less.
 ```sh
 scripts/local.sh                                  # dev node, seeded programs (pool included), .env.local, app on :5173
 SMOKE_SEED='//Alice' pnpm smoke --rpc ws://127.0.0.1:9944    # the app's adapter end to end: stake, unstake, vaults
-pnpm edge --rpc ws://127.0.0.1:9944 [--asset USDT]            # 38 edge cases on a fresh deployment (--unbond 30 --cooldown 30)
+pnpm edge --rpc ws://127.0.0.1:9944 [--asset USDT]            # 38 edge cases on a fresh deployment (pnpm deploy --fresh --unbond 30 --cooldown 30)
 pnpm ui-check --rpc ws://127.0.0.1:9944                        # the built app in a browser against the node
 pnpm session-smoke --rpc ws://127.0.0.1:9944                   # one-click session: enable, act with the key, revoke
 scripts/local.sh stop

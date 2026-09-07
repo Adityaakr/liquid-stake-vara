@@ -24,14 +24,14 @@ export class VaraPool {
         return this._programId;
     }
 
-    public newCtorFromCode(code: Uint8Array | Buffer | HexString, name: string, $symbol: string, decimals: number, apy_bps: number, instant_fee_bps: number, unbond_period_secs: number): TransactionBuilderWithHeader<null> {
+    public newCtorFromCode(code: Uint8Array | Buffer | HexString, name: string, $symbol: string, decimals: number, apy_bps: number, instant_fee_bps: number, unbond_period_secs: number, initial_rate: bigint): TransactionBuilderWithHeader<null> {
         const builder = new TransactionBuilderWithHeader<null>(
             this.api,
             this.registry,
             "upload_program",
             SailsMessageHeader.v1(InterfaceId.zero(), 0, 0),
-            [name, $symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs],
-            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["String", "String", "u8", "u32", "u32", "u64"]}),
+            [name, $symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs, initial_rate],
+            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["String", "String", "u8", "u32", "u32", "u64", "U256"]}),
             this._typeResolver.getTypeDeclString("String"),
             code,
         );
@@ -39,14 +39,14 @@ export class VaraPool {
         return builder;
     }
 
-    public newCtorFromCodeId(codeId: `0x${string}`, name: string, $symbol: string, decimals: number, apy_bps: number, instant_fee_bps: number, unbond_period_secs: number): TransactionBuilderWithHeader<null> {
+    public newCtorFromCodeId(codeId: `0x${string}`, name: string, $symbol: string, decimals: number, apy_bps: number, instant_fee_bps: number, unbond_period_secs: number, initial_rate: bigint): TransactionBuilderWithHeader<null> {
         const builder = new TransactionBuilderWithHeader<null>(
             this.api,
             this.registry,
             "create_program",
             SailsMessageHeader.v1(InterfaceId.zero(), 0, 0),
-            [name, $symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs],
-            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["String", "String", "u8", "u32", "u32", "u64"]}),
+            [name, $symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs, initial_rate],
+            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["String", "String", "u8", "u32", "u32", "u64", "U256"]}),
             this._typeResolver.getTypeDeclString("String"),
             codeId,
         );

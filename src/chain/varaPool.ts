@@ -1,4 +1,4 @@
-import { ONE_VARA } from '@/domain/protocol';
+import { ONE_VARA, type VaultAsset } from '@/domain/protocol';
 import { accrueRate } from '@/domain/math';
 import { parseRate } from '@/domain/format';
 
@@ -41,3 +41,12 @@ export function varaRateHistory(now: number) {
 }
 
 export const VARA_TVL_USD = (Number(STAKED_VARA) / Number(ONE_VARA)) * VARA_PRICE_USD;
+
+/** The stable pools' published figures: share price at T0 and the APY it accrues at. */
+export const STABLE_APY_BPS: Record<VaultAsset, bigint> = { USDT: 840n, USDC: 790n };
+export const STABLE_BASE_PRICE: Record<VaultAsset, bigint> = { USDT: parseRate('1.18'), USDC: parseRate('1.15') };
+export const STABLE_TVL_USD: Record<VaultAsset, number> = { USDT: 577_000, USDC: 230_000 };
+
+export function stablePriceAt(asset: VaultAsset, now: number): bigint {
+  return accrueRate(STABLE_BASE_PRICE[asset], STABLE_APY_BPS[asset], elapsedMs(now));
+}

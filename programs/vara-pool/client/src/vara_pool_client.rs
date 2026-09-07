@@ -39,6 +39,7 @@ pub trait VaraPoolClientCtors {
         apy_bps: u32,
         instant_fee_bps: u32,
         unbond_period_secs: u64,
+        initial_rate: U256,
     ) -> sails_rs::client::PendingCtor<VaraPoolClientProgram, io::New, Self::Env>;
 }
 
@@ -54,6 +55,7 @@ impl<E: sails_rs::client::GearEnv> VaraPoolClientCtors
         apy_bps: u32,
         instant_fee_bps: u32,
         unbond_period_secs: u64,
+        initial_rate: U256,
     ) -> sails_rs::client::PendingCtor<VaraPoolClientProgram, io::New, Self::Env> {
         self.pending_ctor((
             name,
@@ -62,13 +64,14 @@ impl<E: sails_rs::client::GearEnv> VaraPoolClientCtors
             apy_bps,
             instant_fee_bps,
             unbond_period_secs,
+            initial_rate,
         ))
     }
 }
 
 pub mod io {
     use super::*;
-    sails_rs::io_struct_impl!(New (name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> (), 0);
+    sails_rs::io_struct_impl!(New (name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, initial_rate: U256) -> (), 0);
 }
 
 pub mod vft {

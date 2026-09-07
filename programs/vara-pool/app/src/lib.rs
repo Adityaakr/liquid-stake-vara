@@ -162,7 +162,7 @@ pub struct PoolState {
 }
 
 impl PoolState {
-    pub fn new(admin: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, now_ms: u64) -> Self {
+    pub fn new(admin: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, initial_rate: U256, now_ms: u64) -> Self {
         Self {
             admin,
             name,
@@ -171,7 +171,8 @@ impl PoolState {
             total_shares: U256::zero(),
             balances: BTreeMap::new(),
             allowances: BTreeMap::new(),
-            rate: SCALE,
+            // A pool that starts at a rate above 1.0 continues where an earlier pool left off.
+            rate: if initial_rate < SCALE { SCALE } else { initial_rate },
             last_accrual_ms: now_ms,
             apy_bps,
             instant_fee_bps,
@@ -860,9 +861,10 @@ pub struct Program {
 
 #[sails_rs::program]
 impl Program {
-    // Deploy the kVARA pool. The deployer becomes admin.
-    pub fn new(name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> Self {
-        let state = PoolState::new(Syscall::message_source(), name, symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs, Syscall::block_timestamp());
+    // Deploy the kVARA pool. The deployer becomes admin. `initial_rate` (1e18 scale, 0 = 1.0)
+    // is the VARA per kVARA the pool starts at, for a pool that continues an earlier one.
+    pub fn new(name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, initial_rate: U256) -> Self {
+        let state = PoolState::new(Syscall::message_source(), name, symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs, initial_rate, Syscall::block_timestamp());
         Self { state: RefCell::new(state) }
     }
 
@@ -886,7 +888,7 @@ mod tests {
     const ONE: u128 = 1_000_000_000_000; // 12 decimals
 
     fn pool(apy_bps: u32) -> PoolState {
-        PoolState::new(a(1), "Vale kVARA".into(), "kVARA".into(), 12, apy_bps, 30, 7 * 86_400, T0)
+        PoolState::new(a(1), "Vale kVARA".into(), "kVARA".into(), 12, apy_bps, 30, 7 * 86_400, U256::zero(), T0)
     }
 
     #[test]
@@ -1011,6 +1013,16 @@ mod tests {
         assert_eq!(p.create_session(a(3), a(9), 60, all.clone(), T0), Err(PoolError::BadSession));
         assert!(p.revoke_session(a(2)).is_some());
         assert_eq!(p.actor_for(a(9), SessionAction::Unstake, T0 + 1).unwrap(), a(9));
+    }
+
+    #[test]
+    fn initial_rate_applies_from_the_start() {
+        let mut p = PoolState::new(a(1), "k".into(), "kVARA".into(), 12, 3_500, 30, 7 * 86_400, SCALE + SCALE / 20, T0);
+        assert_eq!(p.rate, SCALE + SCALE / 20, "starts at 1.05");
+        assert_eq!(p.stake(a(2), u(105 * ONE)).unwrap(), u(100 * ONE));
+        assert_eq!(p.total_assets(), u(105 * ONE));
+        let below = PoolState::new(a(1), "k".into(), "kVARA".into(), 12, 0, 30, 60, SCALE / 2, T0);
+        assert_eq!(below.rate, SCALE, "a rate below 1.0 is clamped");
     }
 
     #[test]

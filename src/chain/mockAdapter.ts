@@ -1,7 +1,6 @@
 import { BPS, INSTANT_UNSTAKE_FEE_BPS, ONE_STABLE, ONE_VARA, RATE_SCALE, UNBONDING_MS, VAULT_ASSETS, type VaultAsset } from '@/domain/protocol';
-import { accrueRate, assetsToShares, instantUnstakeOut, nativeUnstakeOut, sharesToAssets, varaToKVara } from '@/domain/math';
-import { parseRate } from '@/domain/format';
-import { STAKED_VARA, T0, VARA_APY_BPS, VARA_PRICE_USD, elapsedMs, varaEra, varaRateAt, varaRateHistory } from './varaPool';
+import { assetsToShares, instantUnstakeOut, nativeUnstakeOut, sharesToAssets, varaToKVara } from '@/domain/math';
+import { STABLE_APY_BPS as VAULT_APY, STABLE_TVL_USD as VAULT_TVL, STAKED_VARA, T0, VARA_APY_BPS, VARA_PRICE_USD, elapsedMs, stablePriceAt, varaEra, varaRateAt, varaRateHistory } from './varaPool';
 import { ChainError, type Balances, type DepositAsset, type FaucetInfo, type NetworkId, type ProtocolStats, type StakingAdapter, type TxResult, type UnbondEntry, type VaultStats } from './types';
 
 type StoredUnbond = Omit<UnbondEntry, 'amount'> & { amount: string };
@@ -11,17 +10,13 @@ type Persisted = { balances: Record<string, StoredBalances>; unbonding: Record<s
 const KEY = 'vale.mock.v3';
 
 /**
- * The simulation's clock starts at T0 (see varaPool.ts): there the numbers are exactly the kit's
- * (rate 1.0482 at era 4,182, share prices 1.0261 and 1.0193). From then on every rate accrues
+ * The simulation's clock starts at T0 (see varaPool.ts): there the rates are the published ones
+ * (kVARA 1.0482 at era 4,182, kUSDT 1.18, kUSDC 1.15). From then on every rate accrues
  * continuously at its APY, so a receipt is visibly worth more every second it is held.
  */
 export { T0 };
 const APY_BPS = VARA_APY_BPS;
 
-const VAULT_APY: Record<VaultAsset, bigint> = { USDT: 840n, USDC: 790n };
-const VAULT_BASE_PRICE: Record<VaultAsset, bigint> = { USDT: parseRate('1.0261'), USDC: parseRate('1.0193') };
-/** Pool sizes: kVARA 918.27M VARA at $0.0004258 = $391K, kUSDT $577K, kUSDC $230K, combined $1.198M. */
-const VAULT_TVL: Record<VaultAsset, number> = { USDT: 577_000, USDC: 230_000 };
 const VAULT_UNBOND_SECS = 7 * 86_400;
 const FAUCET_AMOUNT = 1_000n * ONE_STABLE;
 const FAUCET_COOLDOWN_SECS = 24 * 3600;
@@ -79,7 +74,7 @@ export class MockAdapter implements StakingAdapter {
   }
 
   sharePriceAt(asset: VaultAsset, now = this.now()): bigint {
-    return accrueRate(VAULT_BASE_PRICE[asset], VAULT_APY[asset], elapsedMs(now));
+    return stablePriceAt(asset, now);
   }
 
   private currentEra(now = this.now()): { era: number; endsAt: number } {

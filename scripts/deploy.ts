@@ -16,6 +16,7 @@ import { GearApi, GearKeyring, decodeAddress } from '@gear-js/api';
 import { DemoToken } from '../src/chain/idl/demo_token';
 import { Vault } from '../src/chain/idl/vault';
 import { VaraPool } from '../src/chain/idl/vara_pool';
+import { stablePriceAt, varaRateAt } from '../src/chain/varaPool';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1] ?? 'true'] : [])).filter((x) => x.length));
 const RPC = args.rpc ?? process.env.VARA_RPC ?? 'wss://rpc.vara.network';
@@ -40,6 +41,14 @@ const POOL_APY_BPS = 3500;
 const SEED_STAKE_VARA = BigInt(args.stake ?? 0);
 const REWARDS_VARA = BigInt(args.rewards ?? 0);
 const ONE_VARA = 10n ** 12n;
+/**
+ * Starting rates. By default each pool continues at the published rate for today (the app's
+ * simulation runs on the same figures), scaled from 1e9 to the programs' 1e18. `--fresh` starts
+ * every pool at exactly 1.0 (the edge-case suite relies on that).
+ */
+const FRESH = args.fresh === 'true';
+const RATE_SCALE_UP = 10n ** 9n;
+const startRate = (rate1e9: bigint) => (FRESH ? 0n : rate1e9 * RATE_SCALE_UP);
 /** Optional env file to write (for example .env.local so `pnpm dev` runs against this deployment). */
 const ENV_OUT = args.env;
 const IS_LOCAL = RPC.includes('127.0.0.1') || RPC.includes('localhost');
@@ -81,7 +90,7 @@ async function main() {
 
   console.log('\n== kVARA pool');
   const pool = new VaraPool(api);
-  const poolTx = pool.newCtorFromCode(poolWasm, 'Vale kVARA', 'kVARA', 12, POOL_APY_BPS, INSTANT_FEE_BPS, UNBOND_SECS).withAccount(pair).withGas(GAS_INIT);
+  const poolTx = pool.newCtorFromCode(poolWasm, 'Vale kVARA', 'kVARA', 12, POOL_APY_BPS, INSTANT_FEE_BPS, UNBOND_SECS, startRate(varaRateAt(Date.now()))).withAccount(pair).withGas(GAS_INIT);
   await (await poolTx.signAndSend()).response();
   console.log(`pool kVARA: ${pool.programId}`);
   await signAndWait(api.balance.transfer(pool.programId, VAULT_FUNDING_VARA * ONE_VARA), pair);
@@ -110,7 +119,7 @@ async function main() {
     console.log(`token ${a.asset}: ${token.programId}`);
 
     const vault = new Vault(api);
-    const vaultTx = vault.newCtorFromCode(vaultWasm, token.programId, a.vaultName, `k${a.asset}`, 6, a.apyBps, INSTANT_FEE_BPS, UNBOND_SECS).withAccount(pair).withGas(GAS_INIT);
+    const vaultTx = vault.newCtorFromCode(vaultWasm, token.programId, a.vaultName, `k${a.asset}`, 6, a.apyBps, INSTANT_FEE_BPS, UNBOND_SECS, startRate(stablePriceAt(a.asset, Date.now()))).withAccount(pair).withGas(GAS_INIT);
     const v = await vaultTx.signAndSend();
     await v.response();
     console.log(`vault k${a.asset}: ${vault.programId}`);
