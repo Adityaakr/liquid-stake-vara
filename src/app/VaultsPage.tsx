@@ -3,7 +3,6 @@ import { useOutletContext } from 'react-router';
 import { ChevronRight } from 'lucide-react';
 import { AmountField, Badge, Bento, Button, Dialog, Stat, TokenIcon, type TokenSymbol } from '@/ui';
 import { useStore } from '@/chain/store';
-import { NETWORKS } from '@/chain/networks';
 import type { DepositAsset } from '@/chain/types';
 import { accrueRate, assetsToShares, sharesToAssets, validateAmount } from '@/domain/math';
 import { bpsToPercent, formatCompactUsd, formatCountdown, formatRate, formatUnits, parseUnits } from '@/domain/format';
@@ -233,7 +232,7 @@ function FlowChip({ tok, label }: { tok?: TokenSymbol; label: string }) {
 const Arrow = () => <ChevronRight size={15} strokeWidth={1.5} style={{ color: 'var(--fx-indigo)', flexShrink: 0 }} />;
 
 export function VaultsPage() {
-  const { stats, balances, adapter, network } = useStore();
+  const { stats, balances, adapter } = useStore();
   const now = useNow(1000);
   const at = stats?.at ?? now;
   const stable = (asset: VaultAsset): Card => {
@@ -275,11 +274,6 @@ export function VaultsPage() {
   };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {!adapter.deployed && (
-        <div role="alert" style={{ background: '#FFF7E6', border: '1px solid #F5D9A8', borderRadius: 16, padding: '12px 16px', fontSize: 13.5, color: '#7A4B00', lineHeight: 1.5 }}>
-          The vault programs are not configured for {NETWORKS[network].label}. Set the program ids in the environment (see README) to enable deposits.
-        </div>
-      )}
       <div className="ap-vaults">
         <VaultCard card={vara} />
         <VaultCard card={stable('USDT')} />
