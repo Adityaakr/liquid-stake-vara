@@ -90,3 +90,19 @@ mint-backed redeem, so the per-vault funding in the deploy script is only a safe
 Observed cost per user action on the local node: faucet claim 0.29 VARA, approve 0.28,
 deposit 0.81, redeem 0.81, request unbond 0.33. A deposit cost the same with a 60B and a 100B
 gas limit, so the app keeps the 100B margin for the two-call flows and deposits alike.
+
+## One-click sessions (2026-09-07)
+
+Vault gtests `session_key_acts_for_its_owner` and `expired_session_is_rejected`: a key registered
+by Bob deposits and redeems for Bob (shares and payouts land on Bob, the key holds nothing),
+actions outside the session's allow list are rejected with `SessionNotAllowed`, revoking makes the
+key a plain account again, and an expired session is rejected with `SessionExpired`. Host unit
+test `sessions_act_for_their_owner_until_expiry` covers the validation rules (zero or self key,
+duration bounds, empty actions, one owner per key, replacement frees the old key).
+
+`pnpm session-smoke` on a local node: one batched wallet signature enables the session
+(two approvals, two registrations, one transfer), deposit/redeem/unbond are signed by the key and
+the owner pays no fee, revoke returns the key's leftover VARA. Finding: `gearBank.gasMultiplier`
+is 100 units per gas, so a 100B-gas message reserves 10 VARA up front (refunded down to the
+~0.8 VARA burned). Session keys are funded with 15 VARA and the app falls back to wallet signing
+below 11.

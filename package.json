@@ -17,7 +17,8 @@
     "edge": "tsx --tsconfig tsconfig.app.json scripts/edge-cases.ts",
     "ui-check": "node scripts/ui-check.mjs",
     "cost": "tsx --tsconfig tsconfig.app.json scripts/cost.ts",
-    "seed": "tsx --tsconfig tsconfig.app.json scripts/seed.ts"
+    "seed": "tsx --tsconfig tsconfig.app.json scripts/seed.ts",
+    "session-smoke": "tsx --tsconfig tsconfig.app.json scripts/session-smoke.ts"
   },
   "dependencies": {
     "@gear-js/api": "~0.45.0",

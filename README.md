@@ -45,6 +45,20 @@ Anyone holding a little VARA for fees can use the protocol end to end:
 3. Deposit in a pool. The first deposit signs twice: an approval for the vault, then the deposit.
 4. Watch the rate accrue, then withdraw instantly (0.3% fee) or start an unbond and claim later.
 
+## One-click transactions
+
+Open **Settings** and enable a session. That is one wallet signature which bundles: unlimited
+approvals for both vaults, a session key registered in each vault, and 15 VARA moved to that key
+for fees. From then on deposits, withdrawals, unbonds and claims are signed locally by the key
+and go straight to chain, each with a link to the transaction. The key lives only in that browser
+and can only operate your own position: every payout goes to your account. Sessions expire (up to
+30 days) and can be revoked at any time, which returns the key's leftover VARA. Faucet claims
+still ask the wallet, because the token mints to whoever signs.
+
+Vara reserves gas at 100 units per gas unit while a message runs, so a session key needs at least
+11 VARA to send a vault command; below that the app falls back to wallet signing until you enable
+a new session.
+
 ## Programs
 
 Built with `sails-rs 1.0.1` (gstd 1.10), which matches the Vara mainnet runtime (spec 1.10.0).
@@ -78,6 +92,9 @@ state changing call.
   pays after the unbond period.
 - Async commands refuse to start unless the message carries enough gas for every segment
   (`NotEnoughGas`), so a deposit can never move tokens without minting shares.
+- Sessions: `CreateSession(key, duration_secs, actions)`, `RevokeSession()`, queries `Session(owner)`
+  and `SessionOwner(key)`. A message from a registered key acts for its owner within the allowed
+  actions until expiry; payouts always go to the owner.
 - Admin: `SetConfig(apy_bps, fee_bps, unbond_secs)`, `Pause`, `Resume`, `TopUpReserve`,
   `CollectFees`, `TransferAdmin`.
 
@@ -104,6 +121,7 @@ scripts/local.sh                                  # dev node, seeded programs, .
 SMOKE_SEED='//Alice' pnpm smoke --rpc ws://127.0.0.1:9944    # the app's adapter end to end
 pnpm edge --rpc ws://127.0.0.1:9944 [--asset USDT]            # 38 edge cases on a fresh deployment (--unbond 30 --cooldown 30)
 pnpm ui-check --rpc ws://127.0.0.1:9944                        # the built app in a browser against the node
+pnpm session-smoke --rpc ws://127.0.0.1:9944                   # one-click session: enable, act with the key, revoke
 scripts/local.sh stop
 ```
 
