@@ -286,3 +286,54 @@ async fn accrue_checkpoints_and_emits() {
     assert!(info.rate >= rate, "checkpoint persisted and keeps projecting: {} >= {rate}", info.rate);
     assert!(info.last_accrual_at > info.last_accrual_at - 3_000 * 1_000, "clock advanced");
 }
+
+#[allow(non_snake_case)]
+fn okOf<T: core::fmt::Debug, E: core::fmt::Debug>(r: core::result::Result<T, E>) -> T {
+    match r { Ok(v) => v, Err(e) => panic!("unexpected error: {e:?}") }
+}
+fn two() -> U256 { U256::from(2u64) }
+
+#[tokio::test]
+async fn session_key_acts_for_its_owner() {
+    let w = setup().await;
+    let key: u64 = 424_242;
+    w.env.system().mint_to(key, DEFAULT_USERS_INITIAL_BALANCE);
+    // A fresh key, allowed to deposit and redeem only.
+    let session = okOf(w.vault_as(BOB).vault().create_session(actor(key), 3_600, vec![vault::SessionAction::Deposit, vault::SessionAction::Redeem]).await.unwrap());
+    assert_eq!(session.key, actor(key));
+    assert_eq!(w.vault.vault().session_owner(actor(key)).await.unwrap(), Some(actor(BOB)));
+
+    // The key deposits: tokens leave Bob, shares land on Bob, the key holds nothing.
+    let bob_before = w.token_balance(actor(BOB)).await;
+    let shares = okOf(w.vault_as(key).vault().deposit(u(100 * ONE)).await.unwrap());
+    assert_eq!(w.shares(actor(BOB)).await, shares);
+    assert_eq!(w.shares(actor(key)).await, U256::zero());
+    assert_eq!(w.token_balance(actor(BOB)).await, bob_before - u(100 * ONE));
+
+    // The key redeems half: payout goes to Bob.
+    let out = okOf(w.vault_as(key).vault().redeem(shares / two()).await.unwrap());
+    assert_eq!(w.token_balance(actor(BOB)).await, bob_before - u(100 * ONE) + out.net);
+    assert_eq!(w.token_balance(actor(key)).await, U256::zero());
+
+    // Not allowed: the session did not include unbonding.
+    let denied = w.vault_as(key).vault().request_unbond(u(1)).await.unwrap();
+    assert_eq!(denied, Err(vault::VaultError::SessionNotAllowed));
+
+    // Bob revokes; the key is a plain (empty) account again.
+    assert!(w.vault_as(BOB).vault().revoke_session().await.unwrap());
+    assert_eq!(w.vault.vault().session(actor(BOB)).await.unwrap(), None);
+    let plain = w.vault_as(key).vault().redeem(u(1)).await.unwrap();
+    assert_eq!(plain, Err(vault::VaultError::InsufficientShares));
+}
+
+#[tokio::test]
+async fn expired_session_is_rejected() {
+    let w = setup().await;
+    let key: u64 = 515_151;
+    w.env.system().mint_to(key, DEFAULT_USERS_INITIAL_BALANCE);
+    okOf(w.vault_as(BOB).vault().create_session(actor(key), 30, vec![vault::SessionAction::Deposit]).await.unwrap());
+    w.skip_secs(31);
+    let late = w.vault_as(key).vault().deposit(u(10 * ONE)).await.unwrap();
+    assert_eq!(late, Err(vault::VaultError::SessionExpired));
+    assert_eq!(w.vault.vault().session(actor(BOB)).await.unwrap(), None);
+}

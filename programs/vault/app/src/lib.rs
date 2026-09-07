@@ -33,6 +33,8 @@ pub const YEAR_SECS: u64 = 31_536_000;
 pub const MIN_DEPOSIT: u64 = 1_000;
 pub const MAX_APY_BPS: u32 = 100_000; // 1000% (demo ceiling)
 pub const MAX_FEE_BPS: u32 = 1_000; // 10%
+/// Longest session a user may register.
+pub const MAX_SESSION_SECS: u64 = 30 * 86_400;
 /// Gas handed to each call into the underlying token (measured ~1.5B on a 1.10 node).
 pub const TOKEN_CALL_GAS: u64 = 6_000_000_000;
 /// Gas a caller must still have when an async command starts, so the segment that
@@ -67,6 +69,32 @@ pub enum VaultError {
     TokenCall(String),
     /// The message carried less gas than the async flow needs; nothing was moved.
     NotEnoughGas { required: u64 },
+    /// The session key acting for the owner has expired.
+    SessionExpired,
+    /// The session key acting for the owner may not perform this action.
+    SessionNotAllowed,
+    /// Session key, duration or action list is invalid.
+    BadSession,
+}
+
+/// Actions a session key may perform for its owner.
+#[sails_rs::sails_type]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionAction {
+    Deposit,
+    Redeem,
+    Unbond,
+    Claim,
+}
+
+/// A session key registered by an owner: messages signed by `key` act for the owner until
+/// `expires_at`. Payouts always go to the owner, never to the key.
+#[sails_rs::sails_type]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Session {
+    pub key: ActorId,
+    pub expires_at: u64,
+    pub actions: Vec<SessionAction>,
 }
 
 #[sails_rs::sails_type]
@@ -143,6 +171,10 @@ pub struct VaultState {
     pub paused: bool,
     pub unbonds: BTreeMap<ActorId, Vec<Unbond>>,
     pub next_unbond_id: u64,
+    /// owner -> session
+    pub sessions: BTreeMap<ActorId, Session>,
+    /// session key -> owner
+    pub session_keys: BTreeMap<ActorId, ActorId>,
 }
 
 impl VaultState {
@@ -167,6 +199,8 @@ impl VaultState {
             paused: false,
             unbonds: BTreeMap::new(),
             next_unbond_id: 1,
+            sessions: BTreeMap::new(),
+            session_keys: BTreeMap::new(),
         }
     }
 
@@ -366,6 +400,34 @@ impl VaultState {
         if self.admin == who { Ok(()) } else { Err(VaultError::Unauthorized) }
     }
 
+    // --- sessions ------------------------------------------------------------
+
+    /// Who a message acts for: the sender itself, or the owner of the session key it holds.
+    pub fn actor_for(&self, sender: ActorId, action: SessionAction, now_ms: u64) -> Result<ActorId, VaultError> {
+        let Some(owner) = self.session_keys.get(&sender) else { return Ok(sender) };
+        let session = self.sessions.get(owner).ok_or(VaultError::SessionExpired)?;
+        if now_ms >= session.expires_at { return Err(VaultError::SessionExpired); }
+        if !session.actions.contains(&action) { return Err(VaultError::SessionNotAllowed); }
+        Ok(*owner)
+    }
+
+    pub fn create_session(&mut self, owner: ActorId, key: ActorId, duration_secs: u64, actions: Vec<SessionAction>, now_ms: u64) -> Result<Session, VaultError> {
+        if key.is_zero() || key == owner || duration_secs == 0 || duration_secs > MAX_SESSION_SECS || actions.is_empty() { return Err(VaultError::BadSession); }
+        // A key may serve one owner; an owner may hold one session.
+        if let Some(other) = self.session_keys.get(&key) { if *other != owner { return Err(VaultError::BadSession); } }
+        if let Some(old) = self.sessions.remove(&owner) { self.session_keys.remove(&old.key); }
+        let session = Session { key, expires_at: now_ms.saturating_add(duration_secs.saturating_mul(1000)), actions };
+        self.sessions.insert(owner, session.clone());
+        self.session_keys.insert(key, owner);
+        Ok(session)
+    }
+
+    pub fn revoke_session(&mut self, owner: ActorId) -> Option<Session> {
+        let old = self.sessions.remove(&owner)?;
+        self.session_keys.remove(&old.key);
+        Some(old)
+    }
+
     pub fn info(&self, now_ms: u64) -> VaultInfo {
         let rate = self.rate_at(now_ms);
         let total_assets = self.total_shares.checked_mul(rate).map(|v| v / SCALE).unwrap_or(U256::MAX);
@@ -499,6 +561,8 @@ pub enum VaultEvent {
     Redeemed { owner: ActorId, shares: U256, assets: U256, fee: U256, rate: U256 },
     ReserveToppedUp { assets: U256 },
     Resumed { by: ActorId },
+    SessionCreated { owner: ActorId, key: ActorId, expires_at: u64 },
+    SessionRevoked { owner: ActorId },
     UnbondRequested { owner: ActorId, id: u64, shares: U256, assets: U256, claimable_at: u64 },
 }
 
@@ -569,12 +633,12 @@ impl Vault<'_> {
     #[export]
     pub async fn deposit(&mut self, assets: U256) -> Result<U256, VaultError> {
         ensure_gas(GAS_ONE_CALL)?;
-        let owner = Syscall::message_source();
-        let underlying = {
+        let (owner, underlying) = {
             let mut s = self.state.borrow_mut();
+            let owner = s.actor_for(Syscall::message_source(), SessionAction::Deposit, now_ms())?;
             s.accrue(now_ms());
             s.check_deposit(assets)?;
-            s.underlying
+            (owner, s.underlying)
         };
         pull_underlying(underlying, owner, assets).await?;
         let (shares, rate) = {
@@ -592,12 +656,12 @@ impl Vault<'_> {
     #[export]
     pub async fn redeem(&mut self, shares: U256) -> Result<RedeemPreview, VaultError> {
         ensure_gas(GAS_TWO_CALLS)?;
-        let owner = Syscall::message_source();
-        let (underlying, preview, rate) = {
+        let (owner, underlying, preview, rate) = {
             let mut s = self.state.borrow_mut();
+            let owner = s.actor_for(Syscall::message_source(), SessionAction::Redeem, now_ms())?;
             s.accrue(now_ms());
             let p = s.begin_redeem(owner, shares)?;
-            (s.underlying, p, s.rate)
+            (owner, s.underlying, p, s.rate)
         };
         emit_vft_transfer(self.state, owner, ActorId::zero(), shares);
         let paid = async {
@@ -622,12 +686,12 @@ impl Vault<'_> {
     // Timed exit: burn `shares` now, lock assets at the current rate, claim after the unbond period.
     #[export]
     pub fn request_unbond(&mut self, shares: U256) -> Result<Unbond, VaultError> {
-        let owner = Syscall::message_source();
-        let entry = {
+        let (owner, entry) = {
             let mut s = self.state.borrow_mut();
             let now = now_ms();
+            let owner = s.actor_for(Syscall::message_source(), SessionAction::Unbond, now)?;
             s.accrue(now);
-            s.request_unbond(owner, shares, now)?
+            (owner, s.request_unbond(owner, shares, now)?)
         };
         emit_vft_transfer(self.state, owner, ActorId::zero(), shares);
         self.emit_event(VaultEvent::UnbondRequested { owner, id: entry.id, shares, assets: entry.assets, claimable_at: entry.claimable_at }).expect("event");
@@ -638,13 +702,13 @@ impl Vault<'_> {
     #[export]
     pub async fn claim(&mut self, id: u64) -> Result<U256, VaultError> {
         ensure_gas(GAS_TWO_CALLS)?;
-        let owner = Syscall::message_source();
-        let (underlying, entry) = {
+        let (owner, underlying, entry) = {
             let mut s = self.state.borrow_mut();
             let now = now_ms();
+            let owner = s.actor_for(Syscall::message_source(), SessionAction::Claim, now)?;
             s.accrue(now);
             let e = s.take_unbond(owner, id, now)?;
-            (s.underlying, e)
+            (owner, s.underlying, e)
         };
         let paid = async {
             self.ensure_holdings(entry.assets).await?;
@@ -779,6 +843,40 @@ impl Vault<'_> {
                 Err(e)
             }
         }
+    }
+
+    // --- sessions --------------------------------------------------------------
+
+    // Register `key` to act for the caller for `duration_secs` (max 30 days), limited to `actions`.
+    // Replaces any existing session of the caller.
+    #[export]
+    pub fn create_session(&mut self, key: ActorId, duration_secs: u64, actions: Vec<SessionAction>) -> Result<Session, VaultError> {
+        let owner = Syscall::message_source();
+        let session = self.state.borrow_mut().create_session(owner, key, duration_secs, actions, now_ms())?;
+        self.emit_event(VaultEvent::SessionCreated { owner, key, expires_at: session.expires_at }).expect("event");
+        Ok(session)
+    }
+
+    // Drop the caller's session key, if any. Returns whether one existed.
+    #[export]
+    pub fn revoke_session(&mut self) -> bool {
+        let owner = Syscall::message_source();
+        let had = self.state.borrow_mut().revoke_session(owner).is_some();
+        if had { self.emit_event(VaultEvent::SessionRevoked { owner }).expect("event"); }
+        had
+    }
+
+    #[export]
+    pub fn session(&self, owner: ActorId) -> Option<Session> {
+        let s = self.state.borrow();
+        s.sessions.get(&owner).filter(|x| now_ms() < x.expires_at).cloned()
+    }
+
+    #[export]
+    pub fn session_owner(&self, key: ActorId) -> Option<ActorId> {
+        let s = self.state.borrow();
+        let owner = s.session_keys.get(&key)?;
+        s.sessions.get(owner).filter(|x| now_ms() < x.expires_at).map(|_| *owner)
     }
 
     // --- queries -------------------------------------------------------------
@@ -987,6 +1085,31 @@ mod tests {
         assert_eq!(v.allowance(&a(3), &a(4)), u(40_000));
         assert_eq!(v.spend_allowance(a(3), a(4), u(40_001)), Err(VaultError::InsufficientAllowance));
         assert_eq!(v.total_shares, u(1_000_000), "transfers do not change supply");
+    }
+
+    #[test]
+    fn sessions_act_for_their_owner_until_expiry() {
+        let mut v = vault(0);
+        let all = vec![SessionAction::Deposit, SessionAction::Redeem, SessionAction::Unbond, SessionAction::Claim];
+        assert_eq!(v.actor_for(a(2), SessionAction::Deposit, T0).unwrap(), a(2), "no session: the sender acts for itself");
+        assert_eq!(v.create_session(a(2), a(2), 60, all.clone(), T0), Err(VaultError::BadSession));
+        assert_eq!(v.create_session(a(2), ActorId::zero(), 60, all.clone(), T0), Err(VaultError::BadSession));
+        assert_eq!(v.create_session(a(2), a(9), MAX_SESSION_SECS + 1, all.clone(), T0), Err(VaultError::BadSession));
+        assert_eq!(v.create_session(a(2), a(9), 60, vec![], T0), Err(VaultError::BadSession));
+        let s = v.create_session(a(2), a(9), 60, vec![SessionAction::Deposit, SessionAction::Redeem], T0).unwrap();
+        assert_eq!(s.expires_at, T0 + 60_000);
+        assert_eq!(v.actor_for(a(9), SessionAction::Deposit, T0 + 1).unwrap(), a(2));
+        assert_eq!(v.actor_for(a(9), SessionAction::Claim, T0 + 1), Err(VaultError::SessionNotAllowed));
+        assert_eq!(v.actor_for(a(9), SessionAction::Deposit, T0 + 60_000), Err(VaultError::SessionExpired));
+        // another owner cannot claim the same key
+        assert_eq!(v.create_session(a(3), a(9), 60, all.clone(), T0), Err(VaultError::BadSession));
+        // replacing the session frees the old key
+        v.create_session(a(2), a(10), 60, all.clone(), T0).unwrap();
+        assert_eq!(v.actor_for(a(9), SessionAction::Deposit, T0 + 1).unwrap(), a(9), "old key is a plain sender again");
+        assert_eq!(v.actor_for(a(10), SessionAction::Claim, T0 + 1).unwrap(), a(2));
+        assert!(v.revoke_session(a(2)).is_some());
+        assert!(v.revoke_session(a(2)).is_none());
+        assert_eq!(v.actor_for(a(10), SessionAction::Deposit, T0 + 1).unwrap(), a(10));
     }
 
     #[test]

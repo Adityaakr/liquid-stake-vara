@@ -102,6 +102,12 @@ pub mod vft {
         NotEnoughGas {
             required: u64,
         },
+        /// The session key acting for the owner has expired.
+        SessionExpired,
+        /// The session key acting for the owner may not perform this action.
+        SessionNotAllowed,
+        /// Session key, duration or action list is invalid.
+        BadSession,
     }
 
     pub trait Vft {
@@ -141,7 +147,7 @@ pub mod vft {
 
     impl sails_rs::client::Identifiable for VftImpl {
         const INTERFACE_ID: sails_rs::InterfaceId =
-            sails_rs::InterfaceId::from_bytes_8([70, 226, 93, 10, 104, 10, 221, 205]);
+            sails_rs::InterfaceId::from_bytes_8([185, 56, 198, 237, 27, 140, 168, 208]);
     }
 
     impl<E: sails_rs::client::GearEnv> Vft for sails_rs::client::Service<VftImpl, E> {
@@ -273,6 +279,24 @@ pub mod vault {
         pub fee: U256,
         pub net: U256,
     }
+    /// A session key registered by an owner: messages signed by `key` act for the owner until
+    /// `expires_at`. Payouts always go to the owner, never to the key.
+    #[sails_rs::sails_type(crate = sails_rs)]
+    #[derive(PartialEq, Clone, Debug)]
+    pub struct Session {
+        pub key: ActorId,
+        pub expires_at: u64,
+        pub actions: Vec<SessionAction>,
+    }
+    /// Actions a session key may perform for its owner.
+    #[sails_rs::sails_type(crate = sails_rs)]
+    #[derive(PartialEq, Clone, Debug)]
+    pub enum SessionAction {
+        Deposit,
+        Redeem,
+        Unbond,
+        Claim,
+    }
     #[sails_rs::sails_type(crate = sails_rs)]
     #[derive(PartialEq, Clone, Debug)]
     pub struct Unbond {
@@ -309,6 +333,12 @@ pub mod vault {
         NotEnoughGas {
             required: u64,
         },
+        /// The session key acting for the owner has expired.
+        SessionExpired,
+        /// The session key acting for the owner may not perform this action.
+        SessionNotAllowed,
+        /// Session key, duration or action list is invalid.
+        BadSession,
     }
     #[sails_rs::sails_type(crate = sails_rs)]
     #[derive(PartialEq, Clone, Debug)]
@@ -343,6 +373,12 @@ pub mod vault {
             &mut self,
             to: ActorId,
         ) -> sails_rs::client::PendingCall<io::CollectFees, Self::Env>;
+        fn create_session(
+            &mut self,
+            key: ActorId,
+            duration_secs: u64,
+            actions: Vec<SessionAction>,
+        ) -> sails_rs::client::PendingCall<io::CreateSession, Self::Env>;
         fn deposit(
             &mut self,
             assets: U256,
@@ -368,6 +404,13 @@ pub mod vault {
             shares: U256,
         ) -> sails_rs::client::PendingCall<io::RequestUnbond, Self::Env>;
         fn resume(&mut self) -> sails_rs::client::PendingCall<io::Resume, Self::Env>;
+        fn revoke_session(&mut self)
+        -> sails_rs::client::PendingCall<io::RevokeSession, Self::Env>;
+        fn session(&self, owner: ActorId) -> sails_rs::client::PendingCall<io::Session, Self::Env>;
+        fn session_owner(
+            &self,
+            key: ActorId,
+        ) -> sails_rs::client::PendingCall<io::SessionOwner, Self::Env>;
         fn set_config(
             &mut self,
             apy_bps: u32,
@@ -392,7 +435,7 @@ pub mod vault {
 
     impl sails_rs::client::Identifiable for VaultImpl {
         const INTERFACE_ID: sails_rs::InterfaceId =
-            sails_rs::InterfaceId::from_bytes_8([173, 56, 223, 178, 39, 94, 250, 205]);
+            sails_rs::InterfaceId::from_bytes_8([83, 92, 97, 16, 91, 119, 166, 42]);
     }
 
     impl<E: sails_rs::client::GearEnv> Vault for sails_rs::client::Service<VaultImpl, E> {
@@ -408,6 +451,14 @@ pub mod vault {
             to: ActorId,
         ) -> sails_rs::client::PendingCall<io::CollectFees, Self::Env> {
             self.pending_call((to,))
+        }
+        fn create_session(
+            &mut self,
+            key: ActorId,
+            duration_secs: u64,
+            actions: Vec<SessionAction>,
+        ) -> sails_rs::client::PendingCall<io::CreateSession, Self::Env> {
+            self.pending_call((key, duration_secs, actions))
         }
         fn deposit(
             &mut self,
@@ -454,6 +505,20 @@ pub mod vault {
         fn resume(&mut self) -> sails_rs::client::PendingCall<io::Resume, Self::Env> {
             self.pending_call(())
         }
+        fn revoke_session(
+            &mut self,
+        ) -> sails_rs::client::PendingCall<io::RevokeSession, Self::Env> {
+            self.pending_call(())
+        }
+        fn session(&self, owner: ActorId) -> sails_rs::client::PendingCall<io::Session, Self::Env> {
+            self.pending_call((owner,))
+        }
+        fn session_owner(
+            &self,
+            key: ActorId,
+        ) -> sails_rs::client::PendingCall<io::SessionOwner, Self::Env> {
+            self.pending_call((key,))
+        }
         fn set_config(
             &mut self,
             apy_bps: u32,
@@ -487,20 +552,24 @@ pub mod vault {
         sails_rs::io_struct_impl!(Accrue () -> U256, 0, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(Claim (id: u64) -> super::Result<U256, super::VaultError, >, 1, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(CollectFees (to: ActorId) -> super::Result<U256, super::VaultError, >, 2, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Deposit (assets: U256) -> super::Result<U256, super::VaultError, >, 3, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Info () -> super::VaultInfo, 4, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Pause () -> super::Result<bool, super::VaultError, >, 5, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Position (account: ActorId) -> super::Position, 6, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(PreviewDeposit (assets: U256) -> U256, 7, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(PreviewRedeem (shares: U256) -> super::RedeemPreview, 8, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Rate () -> U256, 9, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Redeem (shares: U256) -> super::Result<super::RedeemPreview, super::VaultError, >, 10, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(RequestUnbond (shares: U256) -> super::Result<super::Unbond, super::VaultError, >, 11, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Resume () -> super::Result<bool, super::VaultError, >, 12, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(SetConfig (apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> super::Result<bool, super::VaultError, >, 13, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(TopUpReserve (assets: U256) -> super::Result<bool, super::VaultError, >, 14, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(TransferAdmin (to: ActorId) -> super::Result<bool, super::VaultError, >, 15, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Unbonds (account: ActorId) -> Vec<super::Unbond>, 16, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(CreateSession (key: ActorId, duration_secs: u64, actions: Vec<super::SessionAction>) -> super::Result<super::Session, super::VaultError, >, 3, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Deposit (assets: U256) -> super::Result<U256, super::VaultError, >, 4, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Info () -> super::VaultInfo, 5, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Pause () -> super::Result<bool, super::VaultError, >, 6, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Position (account: ActorId) -> super::Position, 7, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(PreviewDeposit (assets: U256) -> U256, 8, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(PreviewRedeem (shares: U256) -> super::RedeemPreview, 9, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Rate () -> U256, 10, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Redeem (shares: U256) -> super::Result<super::RedeemPreview, super::VaultError, >, 11, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(RequestUnbond (shares: U256) -> super::Result<super::Unbond, super::VaultError, >, 12, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Resume () -> super::Result<bool, super::VaultError, >, 13, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(RevokeSession () -> bool, 14, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Session (owner: ActorId) -> super::Option<super::Session, >, 15, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(SessionOwner (key: ActorId) -> super::Option<ActorId, >, 16, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(SetConfig (apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> super::Result<bool, super::VaultError, >, 17, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(TopUpReserve (assets: U256) -> super::Result<bool, super::VaultError, >, 18, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(TransferAdmin (to: ActorId) -> super::Result<bool, super::VaultError, >, 19, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Unbonds (account: ActorId) -> Vec<super::Unbond>, 20, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -549,6 +618,14 @@ pub mod vault {
             #[codec(index = 9)]
             Resumed { by: ActorId },
             #[codec(index = 10)]
+            SessionCreated {
+                owner: ActorId,
+                key: ActorId,
+                expires_at: u64,
+            },
+            #[codec(index = 11)]
+            SessionRevoked { owner: ActorId },
+            #[codec(index = 12)]
             UnbondRequested {
                 owner: ActorId,
                 id: u64,
@@ -571,7 +648,9 @@ pub mod vault {
                     Self::Redeemed { .. } => 7,
                     Self::ReserveToppedUp { .. } => 8,
                     Self::Resumed { .. } => 9,
-                    Self::UnbondRequested { .. } => 10,
+                    Self::SessionCreated { .. } => 10,
+                    Self::SessionRevoked { .. } => 11,
+                    Self::UnbondRequested { .. } => 12,
                 }
             }
         }
