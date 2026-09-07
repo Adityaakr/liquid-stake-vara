@@ -1,9 +1,10 @@
 import { useOutletContext } from 'react-router';
-import { Droplets, ExternalLink } from 'lucide-react';
+import { useState } from 'react';
+import { Droplets, ExternalLink, Zap } from 'lucide-react';
 import { Badge, Bento, Button } from '@/ui';
 import { useStore } from '@/chain/store';
 import { NETWORKS } from '@/chain/networks';
-import { GearAdapter } from '@/chain/gearAdapter';
+import { GearAdapter, SESSION_DEFAULT_GAS_VARA, SESSION_MIN_GAS } from '@/chain/gearAdapter';
 import { formatCountdown, formatStable, formatVara, shortAddress } from '@/domain/format';
 import { VAULT_ASSETS } from '@/domain/protocol';
 import { Row, useNow } from './bits';
@@ -23,8 +24,11 @@ function Section({ title, children, aside }: { title: string; children: React.Re
 
 export function SettingsPage() {
   const { openWallet } = useOutletContext<AppOutlet>();
-  const { adapter, network, account, balances, faucet, stats, run, tx, disconnect } = useStore();
+  const { adapter, network, account, balances, faucet, stats, run, tx, disconnect, session, refreshSession } = useStore();
   const now = useNow(1000);
+  const [hours, setHours] = useState(24);
+  const canSession = !!adapter.enableSession && adapter.deployed;
+  const sessionLive = !!session && session.expiresAt > now;
   const busy = tx.stage === 'broadcast';
   const net = NETWORKS[network];
   const programs = adapter instanceof GearAdapter ? adapter.programs : undefined;
@@ -71,6 +75,43 @@ export function SettingsPage() {
           </div>
         )}
       </Section>
+
+      {canSession && (
+        <Section title="One-click transactions" aside={sessionLive ? <Badge tone="ok" size="sm">active</Badge> : <Badge tone="neutral" size="sm">off</Badge>}>
+          <p style={{ fontSize: 14, color: 'var(--text-2)', lineHeight: 1.65, margin: '0 0 16px' }}>
+            Skip the wallet prompt on every action. Enabling a session takes one signature: it approves the pools, registers a key that
+            lives only in this browser, and moves a little VARA to that key for fees (Vara reserves 10 VARA per action while it runs and refunds
+            almost all of it, so the key needs a small float). Deposits, withdrawals, unbonds and claims are then
+            sent straight to chain, and every action shows a link to the transaction. Payouts always go to your own account; the key can
+            do nothing else. Revoke at any time to return its leftover VARA.
+          </p>
+          {!account ? (
+            <Button onClick={openWallet}>Connect a wallet first</Button>
+          ) : sessionLive ? (
+            <>
+              <Row k="Session key" v={shortAddress(session!.key, 10, 6)} />
+              <Row k="Expires" v={`in ${formatCountdown(session!.expiresAt - now)}`} />
+              <Row k="VARA for fees" v={`${formatVara(session!.gasBalance)} VARA${session!.gasBalance < SESSION_MIN_GAS ? ' (low, your wallet signs until it is topped up)' : ''}`} />
+              <Row k="Allowed" v={session!.actions.join(', ').toLowerCase()} />
+              <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
+                <Button variant="secondary" loading={busy && tx.label === 'Revoke session'} onClick={() => run('Revoke session', (addr) => adapter.revokeSession!(addr), { title: 'Session revoked', detail: 'Leftover VARA was returned to your account. Actions ask your wallet again.' }).then(() => refreshSession())}>Revoke session</Button>
+              </div>
+            </>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <label style={{ fontSize: 13.5, color: 'var(--text-2)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                Duration
+                <select value={hours} onChange={(e) => setHours(Number(e.target.value))} style={{ height: 36, borderRadius: 10, border: '1px solid var(--fx-mist)', padding: '0 10px', fontFamily: 'var(--font-body)', background: '#fff' }}>
+                  <option value={1}>1 hour</option><option value={24}>24 hours</option><option value={168}>7 days</option><option value={720}>30 days</option>
+                </select>
+              </label>
+              <Button loading={busy && tx.label === 'Enable session'} onClick={() => run('Enable session', (addr) => adapter.enableSession!(addr, { hours, gasVara: SESSION_DEFAULT_GAS_VARA }), { title: 'One-click transactions on', detail: `Pools approved and a session key funded with ${SESSION_DEFAULT_GAS_VARA} VARA for ${hours >= 24 ? `${hours / 24} day${hours > 24 ? 's' : ''}` : `${hours} hour`}.` }).then(() => refreshSession())}>
+                <Zap size={14} strokeWidth={1.5} style={{ marginRight: 6 }} />Enable with one signature
+              </Button>
+            </div>
+          )}
+        </Section>
+      )}
 
       <Section title="Network">
         <Row k="Chain" v={net.label} />

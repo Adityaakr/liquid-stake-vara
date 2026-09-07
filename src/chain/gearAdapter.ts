@@ -1,9 +1,9 @@
 import type { HexString } from '@gear-js/api';
 import { ONE_STABLE, RATE_SCALE, VAULT_ASSETS, type VaultAsset } from '@/domain/protocol';
-import { NETWORKS } from './networks';
+import { NETWORKS, txLink } from './networks';
 import { APP_NAME } from './wallet';
 import { GAS, readPrograms, type ProgramSet } from './config';
-import { ChainError, type Balances, type FaucetInfo, type NetworkId, type DepositAsset, type ProtocolStats, type StakingAdapter, type TxResult, type UnbondEntry, type VaultStats } from './types';
+import { ChainError, type Balances, type FaucetInfo, type NetworkId, type DepositAsset, type ProtocolStats, type SessionInfo, type StakingAdapter, type TxResult, type UnbondEntry, type VaultStats } from './types';
 import type { DemoToken } from './idl/demo_token';
 import type { Vault } from './idl/vault';
 
@@ -11,6 +11,8 @@ type GearApiT = import('@gear-js/api').GearApi;
 type TxBuilder<T> = import('sails-js').TransactionBuilderWithHeader<T>;
 type Outcome<T, E> = { ok: T } | { err: E };
 type WithAccountArgs = Parameters<TxBuilder<unknown>['withAccount']>;
+type SessionPair = Exclude<WithAccountArgs[0], string>;
+type BatchCall = Parameters<GearApiT['tx']['utility']['batchAll']>[0][number];
 
 /** Who signs for an address: a browser extension signer (address + signer) or a keyring pair (scripts, tests). */
 export type Signer = { account: WithAccountArgs[0]; options?: WithAccountArgs[1] };
@@ -29,6 +31,25 @@ async function extensionSigner(address: string): Promise<Signer> {
   const injector = await web3FromAddress(address);
   return { account: address, options: { signer: injector.signer } };
 }
+
+/** Session keys live in this browser only, keyed by the owner address. */
+const SESSION_KEY = 'vale.session.v1';
+type StoredSession = { seed: `0x${string}`; key: string; expiresAt: number };
+function loadSessions(): Record<string, StoredSession> {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY) ?? '{}') as Record<string, StoredSession>; } catch { return {}; }
+}
+function saveSessions(all: Record<string, StoredSession>) {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(all)); } catch { /* private mode */ }
+}
+function randomSeed(): `0x${string}` {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return `0x${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+const SESSION_ACTIONS = ['Deposit', 'Redeem', 'Unbond', 'Claim'] as const;
+/** Smallest VARA balance a session key needs to send a vault command (10 VARA reserve + 1 for the account). */
+export const SESSION_MIN_GAS = 11n * 10n ** 12n;
+/** Default VARA moved to a fresh session key: room for a handful of actions before a top up. */
+export const SESSION_DEFAULT_GAS_VARA = 15;
 
 /** Turn a program error enum (`{ Variant: payload }`) into a sentence. */
 export function describeProgramError(err: unknown): string {
@@ -50,6 +71,9 @@ export function describeProgramError(err: unknown): string {
     TokenRejected: 'The token rejected the transfer',
     TokenCall: 'The token program did not answer',
     NotEnoughGas: 'The transaction did not carry enough gas',
+    SessionExpired: 'Your one-click session has expired. Enable a new one in Settings',
+    SessionNotAllowed: 'Your one-click session does not allow this action',
+    BadSession: 'The session request is invalid',
     FaucetCooldown: 'The faucet is cooling down for this address',
     FaucetDisabled: 'The faucet is switched off',
   };
@@ -78,7 +102,7 @@ function big(v: unknown): bigint {
 
 function userMessage(e: unknown): ChainError {
   if (e instanceof ChainError) return e;
-  const msg = e instanceof Error ? e.message : String(e);
+  const msg = e instanceof Error ? e.message : typeof e === 'object' && e !== null ? JSON.stringify(e, (_, v) => (typeof v === 'bigint' ? v.toString() : v)) : String(e);
   if (/Cancelled|Rejected by user|User denied/i.test(msg)) return new ChainError('You rejected the transaction in your wallet.', 'REJECTED');
   if (/1010|Inability to pay|balance too low/i.test(msg)) return new ChainError('Not enough VARA to pay the transaction fee.', 'INSUFFICIENT');
   // A `throws` function that failed arrives as an undecodable panic payload; say so plainly.
@@ -149,19 +173,122 @@ export class GearAdapter implements StakingAdapter {
     return decodeAddress(address);
   }
 
-  private async send<T>(builder: TxBuilder<T>, address: string, gas: bigint): Promise<{ result: T } & TxResult> {
+  private async send<T>(builder: TxBuilder<T>, address: string, gas: bigint, useSession = false): Promise<{ result: T } & TxResult> {
     try {
-      const signer = await (this.opts.signer ?? extensionSigner)(address);
-      builder.withAccount(signer.account, signer.options);
+      const pair = useSession ? await this.sessionPair(address) : null;
+      if (pair) builder.withAccount(pair);
+      else {
+        const signer = await (this.opts.signer ?? extensionSigner)(address);
+        builder.withAccount(signer.account, signer.options);
+      }
       builder.withGas(gas);
       const { txHash, blockHash, response } = await builder.signAndSend();
       const result = await response();
       const api = await this.connect();
       const header = await api.rpc.chain.getHeader(blockHash);
-      return { result, hash: txHash, blockNumber: header.number.toNumber() };
+      return { result, hash: txHash, blockNumber: header.number.toNumber(), link: txLink(this.network, txHash) };
     } catch (e) {
       throw userMessage(e);
     }
+  }
+
+  // --- one-click sessions -------------------------------------------------------
+
+  /** The session keypair for `address` when a live, funded session exists on this device. */
+  private async sessionPair(address: string): Promise<SessionPair | null> {
+    const stored = loadSessions()[address];
+    if (!stored || stored.expiresAt <= Date.now() + 60_000) return null;
+    const { GearKeyring } = await import('@gear-js/api');
+    const pair = await GearKeyring.fromSeed(stored.seed);
+    const api = await this.connect();
+    const gas = (await api.balance.findOut(pair.address)).toBigInt();
+    // Gas is reserved at 100 units per gas unit: a 100B-gas message needs 10 VARA on the key up front
+    // (most of it is refunded). Below that, keep signing with the wallet.
+    if (gas < SESSION_MIN_GAS) return null;
+    return pair;
+  }
+
+  async getSession(address: string): Promise<SessionInfo | null> {
+    const stored = loadSessions()[address];
+    if (!stored) return null;
+    const asset = VAULT_ASSETS.find((a) => this.programs[a]);
+    if (!asset) return null;
+    const { vault } = await this.programsFor(asset);
+    const who = await this.hex(address);
+    const onChain = await vault.vault.session(who).call();
+    if (!onChain || big(onChain.expires_at) <= BigInt(Date.now())) return null;
+    const { decodeAddress } = await import('@gear-js/api');
+    if (decodeAddress(stored.key) !== onChain.key) return null; // a session from another device is not usable here
+    const api = await this.connect();
+    const gasBalance = (await api.balance.findOut(stored.key)).toBigInt();
+    return { key: stored.key, expiresAt: num(onChain.expires_at), actions: onChain.actions.map((a) => String(a)), gasBalance };
+  }
+
+  /**
+   * One wallet signature for everything the session needs: unlimited approvals for both vaults,
+   * a session key registered in both vaults, and a VARA transfer so the key can pay fees.
+   */
+  async enableSession(address: string, opts: { hours: number; gasVara: number }): Promise<TxResult & { session: SessionInfo }> {
+    const api = await this.connect();
+    const { GearKeyring, decodeAddress } = await import('@gear-js/api');
+    const seed = randomSeed();
+    const pair = await GearKeyring.fromSeed(seed);
+    const keyHex = decodeAddress(pair.address);
+    const durationSecs = Math.max(600, Math.min(30 * 86_400, Math.round(opts.hours * 3600)));
+    const actions = [...SESSION_ACTIONS] as import('./idl/vault').SessionAction[];
+    const calls: BatchCall[] = [];
+    for (const asset of VAULT_ASSETS) {
+      const ids = this.programs[asset];
+      if (!ids) continue;
+      const { token, vault } = await this.programsFor(asset);
+      calls.push(token.vft.approve(ids.vault, 2n ** 256n - 1n).withAccount(address).withGas(GAS.token).extrinsic);
+      calls.push(vault.vault.createSession(keyHex, durationSecs, actions).withAccount(address).withGas(GAS.vaultSync).extrinsic);
+    }
+    calls.push(api.tx.balances.transferKeepAlive(pair.address, BigInt(Math.round(opts.gasVara * 1e12))));
+    const signer = await (this.opts.signer ?? extensionSigner)(address);
+    const hash = await new Promise<string>((resolve, reject) => {
+      const tx = api.tx.utility.batchAll(calls);
+      const cb = ({ status, dispatchError, txHash }: { status: { isInBlock: boolean; isFinalized: boolean }; dispatchError?: unknown; txHash: { toHex(): string } }) => {
+        if (dispatchError) reject(new ChainError(`Session setup failed: ${String(dispatchError)}`, 'PROGRAM'));
+        else if (status.isInBlock || status.isFinalized) resolve(txHash.toHex());
+      };
+      ('options' in signer ? tx.signAndSend(signer.account as string, signer.options ?? {}, cb) : tx.signAndSend(signer.account as SessionPair, cb)).catch((e: unknown) => reject(userMessage(e)));
+    });
+    const all = loadSessions();
+    all[address] = { seed, key: pair.address, expiresAt: Date.now() + durationSecs * 1000 };
+    saveSessions(all);
+    const session = (await this.getSession(address)) ?? { key: pair.address, expiresAt: all[address].expiresAt, actions: [...SESSION_ACTIONS], gasBalance: 0n };
+    return { hash, link: txLink(this.network, hash), session };
+  }
+
+  /** Revoke on chain with one wallet signature, then sweep the key's leftover VARA back. */
+  async revokeSession(address: string): Promise<TxResult> {
+    const api = await this.connect();
+    const stored = loadSessions()[address];
+    const calls: BatchCall[] = [];
+    for (const asset of VAULT_ASSETS) {
+      if (!this.programs[asset]) continue;
+      const { vault } = await this.programsFor(asset);
+      calls.push(vault.vault.revokeSession().withAccount(address).withGas(GAS.vaultSync).extrinsic);
+    }
+    const signer = await (this.opts.signer ?? extensionSigner)(address);
+    const hash = await new Promise<string>((resolve, reject) => {
+      const tx = api.tx.utility.batchAll(calls);
+      const cb = ({ status, dispatchError, txHash }: { status: { isInBlock: boolean; isFinalized: boolean }; dispatchError?: unknown; txHash: { toHex(): string } }) => {
+        if (dispatchError) reject(new ChainError(`Revoke failed: ${String(dispatchError)}`, 'PROGRAM'));
+        else if (status.isInBlock || status.isFinalized) resolve(txHash.toHex());
+      };
+      ('options' in signer ? tx.signAndSend(signer.account as string, signer.options ?? {}, cb) : tx.signAndSend(signer.account as SessionPair, cb)).catch((e: unknown) => reject(userMessage(e)));
+    });
+    if (stored) {
+      try {
+        const { GearKeyring } = await import('@gear-js/api');
+        const pair = await GearKeyring.fromSeed(stored.seed);
+        await new Promise<void>((resolve) => { api.tx.balances.transferAll(address, false).signAndSend(pair, ({ status }) => { if (status.isInBlock || status.isFinalized) resolve(); }).catch(() => resolve()); });
+      } catch { /* leftover dust stays on the key */ }
+      const all = loadSessions(); delete all[address]; saveSessions(all);
+    }
+    return { hash, link: txLink(this.network, hash) };
   }
 
   // --- reads --------------------------------------------------------------
@@ -274,20 +401,20 @@ export class GearAdapter implements StakingAdapter {
       const a = await this.send(token.vft.approve(ids!.vault, 2n ** 256n - 1n), address, GAS.token);
       unwrap(a.result);
     }
-    const r = await this.send(vault.vault.deposit(amount), address, GAS.vaultAsync);
+    const r = await this.send(vault.vault.deposit(amount), address, GAS.vaultAsync, true);
     return { hash: r.hash, blockNumber: r.blockNumber, shares: big(unwrap(r.result)) };
   }
 
   async redeemVault(address: string, asset: VaultAsset, shares: bigint): Promise<TxResult & { net?: bigint; fee?: bigint }> {
     const { vault } = await this.programsFor(asset);
-    const r = await this.send(vault.vault.redeem(shares), address, GAS.vaultAsync);
+    const r = await this.send(vault.vault.redeem(shares), address, GAS.vaultAsync, true);
     const out = unwrap(r.result);
     return { hash: r.hash, blockNumber: r.blockNumber, net: big(out.net), fee: big(out.fee) };
   }
 
   async unbondVault(address: string, asset: VaultAsset, shares: bigint): Promise<TxResult & { amount?: bigint; claimableAt?: number }> {
     const { vault } = await this.programsFor(asset);
-    const r = await this.send(vault.vault.requestUnbond(shares), address, GAS.vaultSync);
+    const r = await this.send(vault.vault.requestUnbond(shares), address, GAS.vaultSync, true);
     const out = unwrap(r.result);
     return { hash: r.hash, blockNumber: r.blockNumber, amount: big(out.assets), claimableAt: num(out.claimable_at) };
   }
@@ -295,7 +422,7 @@ export class GearAdapter implements StakingAdapter {
   async claimUnbond(address: string, asset: DepositAsset, id: string): Promise<TxResult> {
     if (asset === 'VARA') this.notLive();
     const { vault } = await this.programsFor(asset);
-    const r = await this.send(vault.vault.claim(Number(id)), address, GAS.vaultAsync);
+    const r = await this.send(vault.vault.claim(Number(id)), address, GAS.vaultAsync, true);
     unwrap(r.result);
     return r;
   }

@@ -14,3 +14,9 @@ export const NETWORKS: Record<NetworkId, { label: string; rpc: string; ss58: num
 };
 
 export const DEFAULT_NETWORK: NetworkId = 'mainnet';
+
+/** Explorer link for a transaction hash, or undefined on networks without one (local nodes). */
+export function txLink(network: NetworkId, hash: string): string | undefined {
+  const n = NETWORKS[network];
+  return /127\.0\.0\.1|localhost/.test(n.rpc) ? undefined : `${n.explorer}/extrinsic/${hash}`;
+}

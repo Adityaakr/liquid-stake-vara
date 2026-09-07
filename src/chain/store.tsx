@@ -3,10 +3,10 @@ import type { VaultAsset } from '@/domain/protocol';
 import { MockAdapter } from './mockAdapter';
 import { GearAdapter } from './gearAdapter';
 import { DEFAULT_NETWORK, NETWORKS } from './networks';
-import { ChainError, type Account, type Balances, type FaucetInfo, type NetworkId, type ProtocolStats, type StakingAdapter, type TxResult, type TxStage, type UnbondEntry } from './types';
+import { ChainError, type Account, type Balances, type FaucetInfo, type NetworkId, type ProtocolStats, type SessionInfo, type StakingAdapter, type TxResult, type TxStage, type UnbondEntry } from './types';
 import { DEMO_ACCOUNT, connectWallet, recallAccount, rememberAccount } from './wallet';
 
-export type ToastMsg = { id: number; tone: 'ok' | 'warn' | 'danger' | 'info'; title: string; detail?: string };
+export type ToastMsg = { id: number; tone: 'ok' | 'warn' | 'danger' | 'info'; title: string; detail?: string; link?: string };
 
 type Store = {
   adapter: StakingAdapter;
@@ -27,6 +27,8 @@ type Store = {
   balancesError: string | null;
   unbonding: UnbondEntry[];
   faucet: Record<VaultAsset, FaucetInfo> | null;
+  session: SessionInfo | null;
+  refreshSession: () => Promise<void>;
   refresh: () => Promise<void>;
   tx: { stage: TxStage; label?: string; error?: string; result?: TxResult };
   run: (label: string, fn: (address: string) => Promise<TxResult>, onDone?: { title: string; detail?: string } | ((r: TxResult) => { title: string; detail?: string })) => Promise<boolean>;
@@ -64,6 +66,7 @@ export function StoreProvider({ children, adapter: injected }: { children: React
   const [balancesError, setBalancesError] = useState<string | null>(null);
   const [unbonding, setUnbonding] = useState<UnbondEntry[]>([]);
   const [faucet, setFaucet] = useState<Record<VaultAsset, FaucetInfo> | null>(null);
+  const [session, setSession] = useState<SessionInfo | null>(null);
   const [tx, setTx] = useState<Store['tx']>({ stage: 'idle' });
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const seq = useRef(0);
@@ -82,16 +85,22 @@ export function StoreProvider({ children, adapter: injected }: { children: React
     try { setStats(await adapter.getStats()); setStatsError(null); } catch (e) { setStatsError(errorMessage(e)); }
   }, [adapter]);
 
+  const refreshSession = useCallback(async () => {
+    if (!account || !adapter.getSession) { setSession(null); return; }
+    try { setSession(await adapter.getSession(account.address)); } catch { setSession(null); }
+  }, [adapter, account]);
+
   const refresh = useCallback(async () => {
     const mine = ++refreshSeq.current;
     await loadStats();
-    if (!account) { setBalances(null); setUnbonding([]); setFaucet(null); return; }
+    if (!account) { setBalances(null); setUnbonding([]); setFaucet(null); setSession(null); return; }
+    void refreshSession();
     try {
       const [b, u, f] = await Promise.all([adapter.getBalances(account.address), adapter.getUnbonding(account.address), adapter.getFaucet(account.address)]);
       if (mine !== refreshSeq.current) return; // a newer refresh (other account or network) owns the state now
       setBalances(b); setUnbonding(u); setFaucet(f); setBalancesError(null);
     } catch (e) { if (mine === refreshSeq.current) setBalancesError(errorMessage(e)); }
-  }, [adapter, account, loadStats]);
+  }, [adapter, account, loadStats, refreshSession]);
 
   useEffect(() => {
     let live = true;
@@ -146,7 +155,7 @@ export function StoreProvider({ children, adapter: injected }: { children: React
       const result = await fn(account.address);
       setTx({ stage: 'finalized', label, result });
       await refresh();
-      if (onDone) notify({ tone: 'ok', ...(typeof onDone === 'function' ? onDone(result) : onDone) });
+      if (onDone) notify({ tone: 'ok', ...(typeof onDone === 'function' ? onDone(result) : onDone), link: result.link });
       settle(1500);
       return true;
     } catch (e) {
@@ -158,7 +167,7 @@ export function StoreProvider({ children, adapter: injected }: { children: React
     } finally { inFlight.current = false; }
   }, [account, refresh, notify]);
 
-  const value: Store = { adapter, network, setNetwork, stats, statsError, account, accounts, selectAccount, connecting, connect, connectDemo, disconnect, setExternalAccount, balances, balancesError, unbonding, faucet, refresh, tx, run, toasts, notify, dismiss };
+  const value: Store = { adapter, network, setNetwork, stats, statsError, account, accounts, selectAccount, connecting, connect, connectDemo, disconnect, setExternalAccount, balances, balancesError, unbonding, faucet, session, refreshSession, refresh, tx, run, toasts, notify, dismiss };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -1,7 +1,7 @@
 
 !@sails: 1.0.1
 
-service Vft@0x46e25d0a680addcd {
+service Vft@0xb938c6ed1b8ca8d0 {
     events {
         Approval {
             owner: ActorId,
@@ -57,11 +57,17 @@ service Vft@0x46e25d0a680addcd {
             NotEnoughGas {
                 required: u64,
             },
+            /// The session key acting for the owner has expired.
+            SessionExpired,
+            /// The session key acting for the owner may not perform this action.
+            SessionNotAllowed,
+            /// Session key, duration or action list is invalid.
+            BadSession,
         }
     }
 }
 
-service Vault@0xad38dfb2275efacd {
+service Vault@0x535c61105b77a62a {
     events {
         Accrued {
             rate: U256,
@@ -107,6 +113,14 @@ service Vault@0xad38dfb2275efacd {
         Resumed {
             by: ActorId,
         },
+        SessionCreated {
+            owner: ActorId,
+            key: ActorId,
+            expires_at: u64,
+        },
+        SessionRevoked {
+            owner: ActorId,
+        },
         UnbondRequested {
             owner: ActorId,
             id: u64,
@@ -119,6 +133,7 @@ service Vault@0xad38dfb2275efacd {
         Accrue() -> U256;
         Claim(id: u64) -> Result<U256, VaultError>;
         CollectFees(to: ActorId) -> Result<U256, VaultError>;
+        CreateSession(key: ActorId, duration_secs: u64, actions: [SessionAction]) -> Result<Session, VaultError>;
         Deposit(assets: U256) -> Result<U256, VaultError>;
         @query
         Info() -> VaultInfo;
@@ -134,6 +149,11 @@ service Vault@0xad38dfb2275efacd {
         Redeem(shares: U256) -> Result<RedeemPreview, VaultError>;
         RequestUnbond(shares: U256) -> Result<Unbond, VaultError>;
         Resume() -> Result<bool, VaultError>;
+        RevokeSession() -> bool;
+        @query
+        Session(owner: ActorId) -> Option<Session>;
+        @query
+        SessionOwner(key: ActorId) -> Option<ActorId>;
         SetConfig(apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> Result<bool, VaultError>;
         TopUpReserve(assets: U256) -> Result<bool, VaultError>;
         TransferAdmin(to: ActorId) -> Result<bool, VaultError>;
@@ -149,6 +169,20 @@ service Vault@0xad38dfb2275efacd {
             assets: U256,
             fee: U256,
             net: U256,
+        }
+        /// A session key registered by an owner: messages signed by `key` act for the owner until
+        /// `expires_at`. Payouts always go to the owner, never to the key.
+        struct Session {
+            key: ActorId,
+            expires_at: u64,
+            actions: [SessionAction],
+        }
+        /// Actions a session key may perform for its owner.
+        enum SessionAction {
+            Deposit,
+            Redeem,
+            Unbond,
+            Claim,
         }
         struct Unbond {
             id: u64,
@@ -182,6 +216,12 @@ service Vault@0xad38dfb2275efacd {
             NotEnoughGas {
                 required: u64,
             },
+            /// The session key acting for the owner has expired.
+            SessionExpired,
+            /// The session key acting for the owner may not perform this action.
+            SessionNotAllowed,
+            /// Session key, duration or action list is invalid.
+            BadSession,
         }
         struct VaultInfo {
             underlying: ActorId,
@@ -213,7 +253,7 @@ program Vault {
         New(underlying: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64);
     }
     services {
-        Vft@0x46e25d0a680addcd,
-        Vault@0xad38dfb2275efacd,
+        Vft@0xb938c6ed1b8ca8d0,
+        Vault@0x535c61105b77a62a,
     }
 }

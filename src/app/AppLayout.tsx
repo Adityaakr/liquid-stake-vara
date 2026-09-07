@@ -95,7 +95,8 @@ function Sidebar() {
 
 function TopBar({ onWallet }: { onWallet: () => void }) {
   const { pathname } = useLocation();
-  const { stats, account, adapter, connectDemo } = useStore();
+  const { stats, account, adapter, connectDemo, session } = useStore();
+  const now = useNow(30_000);
   const title = TITLES[pathname] ?? 'Vale Protocol';
   return (
     <div className="ap-top">
@@ -112,6 +113,7 @@ function TopBar({ onWallet }: { onWallet: () => void }) {
         </span>
       )}
       {!account && adapter.simulated && <button type="button" className="ap-demo ap-demo-top" onClick={connectDemo}>Demo</button>}
+      {account && session && session.expiresAt > now && <Badge tone="ok" size="sm" title="One-click transactions are on">one-click</Badge>}
       {account ? (
         <button type="button" onClick={onWallet} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', marginLeft: stats ? 0 : 'auto' }} aria-label="Account">
           <Badge tone="accent" mono dot>{shortAddress(account.address)}</Badge>
@@ -150,7 +152,7 @@ export function AppLayout() {
       <MobileBar />
       <WalletDialog open={walletOpen} onClose={() => setWalletOpen(false)} />
       <div style={{ position: 'fixed', right: 24, bottom: 24, zIndex: 120, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {toasts.map((t) => <Toast key={t.id} tone={t.tone} title={t.title} detail={t.detail} onDismiss={() => dismiss(t.id)} />)}
+        {toasts.map((t) => <Toast key={t.id} tone={t.tone} title={t.title} detail={t.detail} link={t.link} onDismiss={() => dismiss(t.id)} />)}
       </div>
     </div>
   );

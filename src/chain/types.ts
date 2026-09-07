@@ -66,7 +66,17 @@ export type FaucetInfo = {
   nextClaimAt: number;
 };
 
-export type TxResult = { hash: string; blockNumber?: number };
+export type TxResult = { hash: string; blockNumber?: number; /** explorer link for the transaction, when the network has one */ link?: string };
+
+/** A registered one-click session: a local key that acts for the account without wallet prompts. */
+export type SessionInfo = {
+  /** SS58 address of the session key */
+  key: string;
+  expiresAt: number;
+  actions: string[];
+  /** VARA held by the session key for fees, in base units */
+  gasBalance: bigint;
+};
 
 export type TxStage = 'idle' | 'broadcast' | 'finalized' | 'error';
 
@@ -109,6 +119,13 @@ export interface StakingAdapter {
   claimUnbond(address: string, asset: DepositAsset, id: string): Promise<TxResult>;
   /** Local dev chains only: send the address some VARA for fees from a dev account. */
   devFund?: (address: string) => Promise<TxResult>;
+  // one-click sessions (signless): optional, only where the programs support them
+  /** The active session for an address, when one exists and its key is on this device. */
+  getSession?: (address: string) => Promise<SessionInfo | null>;
+  /** One wallet signature: approve the vaults, register a fresh session key and fund it with VARA for fees. */
+  enableSession?: (address: string, opts: { hours: number; gasVara: number }) => Promise<TxResult & { session: SessionInfo }>;
+  /** Revoke the session on chain and return the key's remaining VARA to the account. */
+  revokeSession?: (address: string) => Promise<TxResult>;
   /** Subscribe to state changes (new blocks or simulated era ticks). Returns unsubscribe. */
   subscribe(cb: () => void): () => void;
   /** Release sockets and listeners. Called when the adapter is replaced. */
