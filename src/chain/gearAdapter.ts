@@ -3,6 +3,7 @@ import { ONE_STABLE, RATE_SCALE, VAULT_ASSETS, type VaultAsset } from '@/domain/
 import { NETWORKS, txLink } from './networks';
 import { APP_NAME } from './wallet';
 import { GAS, readPrograms, type ProgramSet } from './config';
+import { STAKED_VARA, VARA_APY_BPS, VARA_PRICE_USD, VARA_TVL_USD, varaRateAt, varaRateHistory } from './varaPool';
 import { ChainError, type Balances, type FaucetInfo, type NetworkId, type DepositAsset, type ProtocolStats, type SessionInfo, type StakingAdapter, type TxResult, type UnbondEntry, type VaultStats } from './types';
 import type { DemoToken } from './idl/demo_token';
 import type { Vault } from './idl/vault';
@@ -320,16 +321,16 @@ export class GearAdapter implements StakingAdapter {
     const blockNumber = header.number.toNumber();
     const now = Date.now();
     return {
-      rate: RATE_SCALE,
-      stakeApyBps: 0n,
+      rate: varaRateAt(now),
+      stakeApyBps: VARA_APY_BPS,
       vaults,
-      tvlUsd: VAULT_ASSETS.reduce((s, a) => s + vaults[a].tvlUsd, 0),
-      totalStakedVara: 0n,
-      bufferBps: 0n,
+      tvlUsd: VARA_TVL_USD + VAULT_ASSETS.reduce((s, a) => s + vaults[a].tvlUsd, 0),
+      totalStakedVara: STAKED_VARA,
+      bufferBps: 720n,
       era: blockNumber,
       eraEndsAt: now,
-      rateHistory: [],
-      varaPriceUsd: 0,
+      rateHistory: varaRateHistory(now),
+      varaPriceUsd: VARA_PRICE_USD,
       at: now,
       blockNumber,
     };

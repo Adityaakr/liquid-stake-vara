@@ -103,15 +103,9 @@ function TopBar({ onWallet }: { onWallet: () => void }) {
       <div>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 19, letterSpacing: 'var(--ls-heading)', lineHeight: 1.2 }}>{title}</div>
       </div>
-      {adapter.stakingLive ? (
-        <span className="ap-pill ap-rate" style={{ marginLeft: 'auto' }}>
-          1 kVARA = <span style={{ color: 'var(--fx-indigo)', fontWeight: 600 }} className={stats ? undefined : 'skeleton'}>{stats ? formatRate(stats.rate) : '0.0000'}</span> VARA
-        </span>
-      ) : (
-        <span className="ap-pill ap-rate" style={{ marginLeft: 'auto' }}>
-          1 kUSDC = <span style={{ color: 'var(--fx-indigo)', fontWeight: 600 }} className={stats ? undefined : 'skeleton'}>{stats ? formatRate(stats.vaults.USDC.rate, 6) : '0.000000'}</span> USDC
-        </span>
-      )}
+      <span className="ap-pill ap-rate" style={{ marginLeft: 'auto' }}>
+        1 kVARA = <span style={{ color: 'var(--fx-indigo)', fontWeight: 600 }} className={stats ? undefined : 'skeleton'}>{stats ? formatRate(stats.rate) : '0.0000'}</span> VARA
+      </span>
       {!account && adapter.simulated && <button type="button" className="ap-demo ap-demo-top" onClick={connectDemo}>Demo</button>}
       {account && session && session.expiresAt > now && <Badge tone="ok" size="sm" title="One-click transactions are on">one-click</Badge>}
       {account ? (

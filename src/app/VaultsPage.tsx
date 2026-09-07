@@ -126,9 +126,9 @@ function VaultCard({ card }: { card: Card }) {
         {!card.live ? <Badge tone="info" size="sm">coming soon</Badge> : card.paused ? <Badge tone="warn" size="sm">paused</Badge> : <Badge tone={isVara ? 'accent' : 'ok'} size="sm">{isVara ? 'liquid staking' : 'live'}</Badge>}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, margin: '22px 0 16px' }}>
-        <Stat label={isVara ? 'Staking APY' : 'Deposit APY'} value={card.live ? apy : '—'} size="sm" gradient loading={!stats} />
-        <Stat label="TVL" value={card.live ? formatCompactUsd(card.tvlUsd) : '—'} size="sm" loading={!stats} />
-        <Stat label={isVara ? 'Rate' : 'Share price'} value={card.live ? formatRate(rateNow, 6) : '—'} size="sm" mono loading={!stats} />
+        <Stat label={isVara ? 'Staking APY' : 'Deposit APY'} value={apy} size="sm" gradient loading={!stats} />
+        <Stat label="TVL" value={formatCompactUsd(card.tvlUsd)} size="sm" loading={!stats} />
+        <Stat label={isVara ? 'Rate' : 'Share price'} value={formatRate(rateNow, 6)} size="sm" mono loading={!stats} />
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         {[`instant exit ${bpsToPercent(card.feeBps, 2)}`, `unbond ${periodLabel(card.unbondSecs)}`, `no lockup on ${rec}`].map((t) => <span key={t} style={{ fontSize: 12, color: 'var(--text-2)', background: '#fff', border: '1px solid var(--fx-mist)', borderRadius: 99, padding: '4px 10px' }}>{t}</span>)}
@@ -136,7 +136,7 @@ function VaultCard({ card }: { card: Card }) {
       <div style={{ margin: '12px 0 18px' }}>
         <Row k="Your position" v={account && balances ? `${fmt(card.receipts, decimals)} ${rec} ≈ ${fmt(value, decimals)} ${asset}` : '—'} />
         {card.principal !== null && <Row k="Earned so far" v={account && balances ? (hasPosition ? `+${fmt(earned, decimals, 6)} ${asset}` : `0 ${asset}`) : '—'} accent={hasPosition} />}
-        <Row k="Worth in 12 months" v={!card.live ? 'after the validator integration' : account && balances && hasPosition ? `≈ ${fmt(inYear(value), decimals)} ${asset}` : `${apy} on every ${asset}`} />
+        <Row k="Worth in 12 months" v={account && balances && hasPosition ? `≈ ${fmt(inYear(value), decimals)} ${asset}` : `${apy} on every ${asset}`} />
         <Row k={`Wallet ${asset}`} v={account && balances ? `${fmt(card.wallet, decimals)} ${asset}` : '—'} />
       </div>
       <div style={{ marginTop: 'auto', display: 'flex', gap: 10, flexWrap: 'wrap' }}>

@@ -1,6 +1,7 @@
 import { BPS, INSTANT_UNSTAKE_FEE_BPS, ONE_STABLE, ONE_VARA, RATE_SCALE, UNBONDING_MS, VAULT_ASSETS, type VaultAsset } from '@/domain/protocol';
 import { accrueRate, assetsToShares, instantUnstakeOut, nativeUnstakeOut, sharesToAssets, varaToKVara } from '@/domain/math';
 import { parseRate } from '@/domain/format';
+import { STAKED_VARA, T0, VARA_APY_BPS, VARA_PRICE_USD, elapsedMs, varaEra, varaRateAt, varaRateHistory } from './varaPool';
 import { ChainError, type Balances, type DepositAsset, type FaucetInfo, type NetworkId, type ProtocolStats, type StakingAdapter, type TxResult, type UnbondEntry, type VaultStats } from './types';
 
 type StoredUnbond = Omit<UnbondEntry, 'amount'> & { amount: string };
@@ -8,25 +9,19 @@ type StoredBalances = Record<Exclude<keyof Balances, 'principal'>, string> & { p
 type Persisted = { balances: Record<string, StoredBalances>; unbonding: Record<string, StoredUnbond[]>; faucet: Record<string, Partial<Record<VaultAsset, number>>> };
 
 const KEY = 'vale.mock.v3';
-const ERA_MS = 12 * 60 * 60 * 1000;
 
 /**
- * The simulation's clock starts here: at T0 the numbers are exactly the kit's (rate 1.0482 at
- * era 4,182, share prices 1.0261 and 1.0193). From then on every rate accrues continuously at
- * its APY, so a receipt is visibly worth more every second it is held.
+ * The simulation's clock starts at T0 (see varaPool.ts): there the numbers are exactly the kit's
+ * (rate 1.0482 at era 4,182, share prices 1.0261 and 1.0193). From then on every rate accrues
+ * continuously at its APY, so a receipt is visibly worth more every second it is held.
  */
-export const T0 = Date.UTC(2026, 8, 1);
-const BASE_ERA = 4182;
-const BASE_RATE = parseRate('1.0482');
-/** kVARA compounds native staking rewards; the simulated pool realises ~35% APY. */
-const APY_BPS = 3500n;
+export { T0 };
+const APY_BPS = VARA_APY_BPS;
 
 const VAULT_APY: Record<VaultAsset, bigint> = { USDT: 840n, USDC: 790n };
 const VAULT_BASE_PRICE: Record<VaultAsset, bigint> = { USDT: parseRate('1.0261'), USDC: parseRate('1.0193') };
 /** Pool sizes: kVARA 918.27M VARA at $0.0004258 = $391K, kUSDT $577K, kUSDC $230K, combined $1.198M. */
 const VAULT_TVL: Record<VaultAsset, number> = { USDT: 577_000, USDC: 230_000 };
-const STAKED_VARA = 918_270_000n * ONE_VARA;
-const VARA_PRICE_USD = 0.0004258;
 const VAULT_UNBOND_SECS = 7 * 86_400;
 const FAUCET_AMOUNT = 1_000n * ONE_STABLE;
 const FAUCET_COOLDOWN_SECS = 24 * 3600;
@@ -79,24 +74,16 @@ export class MockAdapter implements StakingAdapter {
   }
   private emit() { this.listeners.forEach((l) => l()); }
 
-  /** Whole seconds since T0, never negative, so rates are stable within a second. */
-  private elapsedMs(now = this.now()): number {
-    return Math.max(0, Math.floor((now - T0) / 1000) * 1000);
-  }
-
   rateAt(now = this.now()): bigint {
-    return accrueRate(BASE_RATE, APY_BPS, this.elapsedMs(now));
+    return varaRateAt(now);
   }
 
   sharePriceAt(asset: VaultAsset, now = this.now()): bigint {
-    return accrueRate(VAULT_BASE_PRICE[asset], VAULT_APY[asset], this.elapsedMs(now));
+    return accrueRate(VAULT_BASE_PRICE[asset], VAULT_APY[asset], elapsedMs(now));
   }
 
   private currentEra(now = this.now()): { era: number; endsAt: number } {
-    const elapsed = this.elapsedMs(now);
-    const era = BASE_ERA + Math.floor(elapsed / ERA_MS);
-    const endsAt = T0 + (era - BASE_ERA + 1) * ERA_MS;
-    return { era, endsAt };
+    return varaEra(now);
   }
 
   private vaultStats(asset: VaultAsset, now: number): VaultStats {
@@ -119,10 +106,8 @@ export class MockAdapter implements StakingAdapter {
   async getStats(): Promise<ProtocolStats> {
     const now = this.now();
     const { era, endsAt } = this.currentEra(now);
-    const rate = this.rateAt(now);
-    const eraRate = (e: number) => accrueRate(BASE_RATE, APY_BPS, Math.max(0, (e - BASE_ERA) * ERA_MS));
     return {
-      rate,
+      rate: this.rateAt(now),
       stakeApyBps: APY_BPS,
       vaults: { USDT: this.vaultStats('USDT', now), USDC: this.vaultStats('USDC', now) },
       tvlUsd: (Number(STAKED_VARA) / Number(ONE_VARA)) * VARA_PRICE_USD + VAULT_TVL.USDT + VAULT_TVL.USDC,
@@ -130,7 +115,7 @@ export class MockAdapter implements StakingAdapter {
       bufferBps: 720n,
       era,
       eraEndsAt: endsAt,
-      rateHistory: [era - 2, era - 1, era].map((e) => ({ era: e, rate: e === era ? rate : eraRate(e) })),
+      rateHistory: varaRateHistory(now),
       varaPriceUsd: VARA_PRICE_USD,
       at: now,
     };
@@ -184,7 +169,7 @@ export class MockAdapter implements StakingAdapter {
 
   private async tx(): Promise<TxResult> {
     await wait(this.latency);
-    return { hash: hash(), blockNumber: 12_000_000 + Math.floor(this.elapsedMs() / 3000) };
+    return { hash: hash(), blockNumber: 12_000_000 + Math.floor(elapsedMs(this.now()) / 3000) };
   }
 
   private pushUnbond(address: string, u: StoredUnbond) {
