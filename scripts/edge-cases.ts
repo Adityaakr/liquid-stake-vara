@@ -6,7 +6,7 @@
  *   node node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.app.json scripts/edge-cases.ts \
  *     --rpc ws://127.0.0.1:9944 --deployment deployments/local.json
  *
- * Expects the deployment to use short periods (`pnpm deploy --unbond 30 --cooldown 30`).
+ * Expects a fresh deployment with short periods (`pnpm deploy --fresh --unbond 30 --cooldown 30 --vesting 3600`).
  */
 import { readFileSync } from 'node:fs';
 import { GearApi, GearKeyring, decodeAddress, type HexString } from '@gear-js/api';
@@ -84,10 +84,11 @@ async function main() {
   }
 
   console.log('\n# setup');
-  await check('admin sets a zero APY so share math is exact', async () => {
-    okOf(await send(vault.vault.setConfig(0, 30, 30), alice, G40));
+  await check('admin sets short periods; nothing is vesting so share math is exact', async () => {
+    okOf(await send(vault.vault.setConfig(30, 30, 3_600), alice, G40));
     const i = await info();
-    must(Number(i.apy_bps) === 0 && Number(i.unbond_period_secs) === 30, `config ${i.apy_bps} ${i.unbond_period_secs}`);
+    must(Number(i.apy_bps) === 0 && Number(i.unbond_period_secs) === 30 && Number(i.vesting_period_secs) === 3_600, `config ${i.apy_bps} ${i.unbond_period_secs} ${i.vesting_period_secs}`);
+    must(big(i.locked_rewards) === 0n && big(i.rate) === SCALE, 'a fresh vault starts at 1.0 with no rewards');
   });
   await check('faucet claims for both accounts', async () => {
     okOf(await send(token.faucet.claim(), alice, G30));
@@ -157,7 +158,7 @@ async function main() {
   });
 
   console.log('\n# redeem and receipts');
-  await check('preview matches the actual redeem at zero APY', async () => {
+  await check('preview matches the actual redeem while nothing vests', async () => {
     const p = await vault.vault.previewRedeem(4n * ONE).call();
     const out = okOf(await send(vault.vault.redeem(4n * ONE), bob));
     must(big(out.assets) === big(p.assets) && big(out.fee) === big(p.fee) && big(out.net) === big(p.net), `preview ${JSON.stringify(p)} vs ${JSON.stringify(out)}`);
@@ -194,56 +195,80 @@ async function main() {
     return `one succeeded, one rejected: ${errs[0]}`;
   });
 
-  console.log('\n# yield and the mint fallback');
-  await check('APY 1000% accrues within seconds and info projects it', async () => {
-    // zero fee here so every payout above principal needs the shortfall mint
-    okOf(await send(vault.vault.setConfig(100_000, 0, 30), alice, G40));
+  console.log('\n# rewards vest, nothing is minted');
+  let tranche = 0n;
+  await check('a standing position (rewards funded into an empty vault vest to nobody and are swept to fees)', async () => {
+    okOf(await send(token.admin.mint(A, 1_000n * ONE), alice, G30));
+    okOf(await send(vault.vault.deposit(1_000n * ONE), alice));
+    must(big((await info()).total_shares) >= 1_000n * ONE, 'no standing position');
+  });
+  await check('anyone can fund rewards; they are locked at first and the rate does not jump', async () => {
+    // Bob (not the admin) funds 50 USDC on top of what the vault holds.
+    okOf(await send(token.admin.mint(B, 50n * ONE), alice, G30));
+    const i0 = await info();
+    const supply0 = big(await token.vft.totalSupply().call());
+    okOf(await send(vault.vault.fundRewards(50n * ONE), bob));
+    const i1 = await info();
+    tranche = 50n * ONE;
+    must(big(i1.holdings) === big(i0.holdings) + 50n * ONE, 'holdings did not grow by the tranche');
+    must(big(i1.locked_rewards) > 49n * ONE, `locked ${i1.locked_rewards}`);
+    must(big(i1.rate) < big(i0.rate) + big(i0.rate) / 1000n, `rate jumped ${i0.rate} -> ${i1.rate}`);
+    must(Number(i1.apy_bps) > 0 && Number(i1.vesting_ends_at) > Date.now(), `apy ${i1.apy_bps} ends ${i1.vesting_ends_at}`);
+    must(big(await token.vft.totalSupply().call()) === supply0, 'funding minted tokens');
+    return `apy ${Number(i1.apy_bps) / 100}% while the tranche vests`;
+  });
+  await check('the rate rises linearly as the tranche vests', async () => {
     const r0 = big(await vault.vault.rate().call());
+    const l0 = big((await info()).locked_rewards);
     await sleep(9_000);
     const r1 = big(await vault.vault.rate().call());
+    const l1 = big((await info()).locked_rewards);
     must(r1 > r0, `rate did not move ${r0} -> ${r1}`);
-    return `rate ${r0} -> ${r1}`;
+    const released = l0 - l1;
+    // 9s of a 3600s tranche is 0.25%; blocks land within a few seconds of that.
+    must(released > tranche / 800n && released < tranche / 200n, `released ${released} of ${tranche} in ~9s`);
+    return `rate ${r0} -> ${r1}, released ${released}`;
   });
-  await check('redeem with yield mints exactly the shortfall', async () => {
-    // A 10M USDC position so a few seconds of yield dwarf any fee dust in holdings; forces the mint path.
-    okOf(await send(token.admin.mint(A, 10_000_000n * ONE), alice, G30));
-    okOf(await send(vault.vault.deposit(10_000_000n * ONE), alice));
+  await check('a depositor who leaves at once earns nothing from the tranche', async () => {
+    const i0 = await info();
+    const expected = big(await vault.vault.previewDeposit(100n * ONE).call());
+    const got = big(okOf(await send(vault.vault.deposit(100n * ONE), bob)));
+    must(got <= expected && got < 100n * ONE, `shares ${got} at a rate above 1.0 (preview ${expected})`);
+    const out = okOf(await send(vault.vault.redeem(got), bob));
+    must(big(out.assets) <= 100n * ONE + ONE / 100n, `round trip paid ${out.assets} on 100`);
+    must(big(out.net) < 100n * ONE, `net ${out.net} should be below principal after the fee`);
+    const i1 = await info();
+    must(big(i1.distributable) + big(i1.fees_accrued) >= big(i0.distributable) + big(i0.fees_accrued), 'the vault lost value on a round trip');
+    return `100 in, ${big(out.net)} out (fee ${big(out.fee)})`;
+  });
+  await check('redeem with vested yield pays from holdings and mints nothing', async () => {
+    okOf(await send(token.admin.mint(A, 1_000n * ONE), alice, G30));
+    const shares0 = big(okOf(await send(vault.vault.deposit(1_000n * ONE), alice)));
     await sleep(6_000);
     const supply0 = big(await token.vft.totalSupply().call());
     const h0 = big((await info()).holdings);
-    const out = okOf(await send(vault.vault.redeem(await shares(A)), alice));
-    must(big(out.net) > 10_000_000n * ONE, `no yield paid: ${big(out.net)}`);
-    const supply1 = big(await token.vft.totalSupply().call());
-    const minted = supply1 - supply0;
-    const expected = big(out.net) > h0 ? big(out.net) - h0 : 0n;
-    must(minted === expected && minted > 0n, `minted ${minted} expected ${expected} (holdings before ${h0})`);
-    return `paid ${big(out.net)}, minted ${minted}`;
+    const out = okOf(await send(vault.vault.redeem(shares0), alice));
+    must(big(out.assets) > 1_000n * ONE, `no yield paid: ${big(out.assets)}`);
+    must(big(await token.vft.totalSupply().call()) === supply0, 'the vault minted');
+    must(big((await info()).holdings) === h0 - big(out.net), 'holdings did not fall by the payout');
+    return `paid ${big(out.net)} on 1,000 after a few seconds of vesting`;
   });
-  await check('redeem when the vault lost its minter role fails and restores shares', async () => {
-    okOf(await send(token.admin.revokeMinter(V), alice, G30));
-    okOf(await send(vault.vault.deposit(10_000_000n * ONE), alice));
-    await sleep(6_000);
-    const s0 = await shares(A); const b0 = await bal(A); const fees0 = big((await info()).fees_accrued);
-    try {
-      const m = await expectErr(send(vault.vault.redeem(s0), alice), /token rejected|Unauthorized/i);
-      must((await shares(A)) === s0, 'shares not restored');
-      must((await bal(A)) === b0, 'balance changed');
-      must(big((await info()).fees_accrued) === fees0, 'fees not restored');
-      return m;
-    } finally {
-      okOf(await send(token.admin.grantMinter(V), alice, G30));
-    }
+  await check('the vault is not a minter of its underlying', async () => {
+    must(!(await token.admin.isMinter(V).call()), 'vault is a minter');
   });
-  await check('after the role is back the same redeem succeeds', async () => {
-    const s0 = await shares(A);
-    const b0 = await bal(A);
-    const out = okOf(await send(vault.vault.redeem(s0), alice));
-    must((await shares(A)) === 0n && (await bal(A)) === b0 + big(out.net), 'payout');
-    okOf(await send(vault.vault.setConfig(100_000, 30, 30), alice, G40));
+  await check('dust funding cannot stretch the running tranche', async () => {
+    const end0 = Number((await info()).vesting_ends_at);
+    okOf(await send(token.admin.mint(B, 10n), alice, G30));
+    okOf(await send(vault.vault.fundRewards(1n), bob));
+    okOf(await send(vault.vault.fundRewards(1n), bob));
+    const end1 = Number((await info()).vesting_ends_at);
+    must(end1 <= end0 + 1_000 && end1 >= end0 - 2_000, `vesting end moved ${end0} -> ${end1}`);
   });
-  await check('accrue is callable by anyone', async () => {
-    const r = big(await send(vault.vault.accrue(), bob, G40));
-    must(r > SCALE, `rate ${r}`);
+  await check('fund rewards with zero or without approval is rejected', async () => {
+    await expectErr(send(vault.vault.fundRewards(0n), bob), /more than zero|ZeroAmount/i);
+    okOf(await send(token.vft.approve(V, 0n), bob, G30));
+    await expectErr(send(vault.vault.fundRewards(1n * ONE), bob), /not approved|InsufficientAllowance/i);
+    okOf(await send(token.vft.approve(V, 2n ** 256n - 1n), bob, G30));
   });
 
   console.log('\n# unbonding');
@@ -258,10 +283,11 @@ async function main() {
     const list = await vault.vault.unbonds(B).call();
     must(list.length === 1 && Number(list[0].id) === entryId, 'entry listed');
   });
-  await check('locked assets do not keep accruing', async () => {
+  await check('locked assets do not keep earning while the tranche vests', async () => {
     await sleep(4_000);
     const list = await vault.vault.unbonds(B).call();
     must(big(list[0].assets) === entryAssets, 'assets changed');
+    must(big((await info()).locked_rewards) > 0n, 'the tranche should still be vesting during this check');
   });
   await check('request unbond above balance is rejected', async () => expectErr(send(vault.vault.requestUnbond((await shares(B)) + 1n), bob, G40), /receipt tokens|InsufficientShares/i));
   await check('claim before maturity is rejected', async () => expectErr(send(vault.vault.claim(entryId), bob), /not ended|UnbondNotReady/i));
@@ -277,14 +303,15 @@ async function main() {
 
   console.log('\n# pause and admin');
   await check('non-admin cannot change config, pause, or transfer admin', async () => {
-    await expectErr(send(vault.vault.setConfig(1, 1, 1), bob, G40), /admin|Unauthorized/i);
+    await expectErr(send(vault.vault.setConfig(1, 1, 3_600), bob, G40), /admin|Unauthorized/i);
     await expectErr(send(vault.vault.pause(), bob, G40), /admin|Unauthorized/i);
     await expectErr(send(vault.vault.transferAdmin(B), bob, G40), /admin|Unauthorized/i);
     await expectErr(send(vault.vault.collectFees(B), bob), /admin|Unauthorized/i);
   });
   await check('config bounds are enforced', async () => {
-    await expectErr(send(vault.vault.setConfig(100_001, 30, 30), alice, G40), /BadConfig/i);
-    await expectErr(send(vault.vault.setConfig(100, 1_001, 30), alice, G40), /BadConfig/i);
+    await expectErr(send(vault.vault.setConfig(1_001, 30, 3_600), alice, G40), /BadConfig/i);
+    await expectErr(send(vault.vault.setConfig(30, 30, 60), alice, G40), /BadConfig/i);
+    await expectErr(send(vault.vault.setConfig(30, 30, 366 * 86_400), alice, G40), /BadConfig/i);
   });
   await check('paused vault rejects deposit, redeem and unbond, then resumes', async () => {
     okOf(await send(vault.vault.pause(), alice, G40));
@@ -301,12 +328,6 @@ async function main() {
     await expectErr(send(vault.vault.deposit(5n * ONE), bob), /paused|rejected/i);
     must((await shares(B)) === s0, 'shares minted');
     okOf(await send(token.admin.resume(), alice, G30));
-  });
-  await check('top up reserve mints into the vault', async () => {
-    const h0 = big((await info()).holdings);
-    okOf(await send(vault.vault.topUpReserve(1_000n * ONE), alice));
-    must(big((await info()).holdings) === h0 + 1_000n * ONE, 'holdings');
-    must((await bal(V)) >= h0 + 1_000n * ONE, 'token balance');
   });
   await check('admin transfer hands control over and back', async () => {
     okOf(await send(vault.vault.transferAdmin(B), alice, G40));

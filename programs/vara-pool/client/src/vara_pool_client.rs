@@ -36,9 +36,9 @@ pub trait VaraPoolClientCtors {
         name: String,
         symbol: String,
         decimals: u8,
-        apy_bps: u32,
         instant_fee_bps: u32,
         unbond_period_secs: u64,
+        vesting_period_secs: u64,
         initial_rate: U256,
     ) -> sails_rs::client::PendingCtor<VaraPoolClientProgram, io::New, Self::Env>;
 }
@@ -52,18 +52,18 @@ impl<E: sails_rs::client::GearEnv> VaraPoolClientCtors
         name: String,
         symbol: String,
         decimals: u8,
-        apy_bps: u32,
         instant_fee_bps: u32,
         unbond_period_secs: u64,
+        vesting_period_secs: u64,
         initial_rate: U256,
     ) -> sails_rs::client::PendingCtor<VaraPoolClientProgram, io::New, Self::Env> {
         self.pending_ctor((
             name,
             symbol,
             decimals,
-            apy_bps,
             instant_fee_bps,
             unbond_period_secs,
+            vesting_period_secs,
             initial_rate,
         ))
     }
@@ -71,7 +71,7 @@ impl<E: sails_rs::client::GearEnv> VaraPoolClientCtors
 
 pub mod io {
     use super::*;
-    sails_rs::io_struct_impl!(New (name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, initial_rate: U256) -> (), 0);
+    sails_rs::io_struct_impl!(New (name: String, symbol: String, decimals: u8, instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64, initial_rate: U256) -> (), 0);
 }
 
 pub mod vft {
@@ -89,7 +89,7 @@ pub mod vft {
         InsufficientShares,
         InsufficientBalance,
         InsufficientAllowance,
-        /// The pool's VARA reserve cannot cover this payout yet; nothing changed.
+        /// The pool's distributable VARA cannot cover this payout; nothing changed.
         InsufficientReserve {
             available: U256,
         },
@@ -106,7 +106,7 @@ pub mod vft {
         SessionExpired,
         /// The session key acting for the owner may not perform this action.
         SessionNotAllowed,
-        /// Session key, duration or action list is invalid.
+        /// Session key, duration or action list is invalid, or no matching proposal exists.
         BadSession,
     }
 
@@ -278,7 +278,7 @@ pub mod pool {
         InsufficientShares,
         InsufficientBalance,
         InsufficientAllowance,
-        /// The pool's VARA reserve cannot cover this payout yet; nothing changed.
+        /// The pool's distributable VARA cannot cover this payout; nothing changed.
         InsufficientReserve {
             available: U256,
         },
@@ -295,7 +295,7 @@ pub mod pool {
         SessionExpired,
         /// The session key acting for the owner may not perform this action.
         SessionNotAllowed,
-        /// Session key, duration or action list is invalid.
+        /// Session key, duration or action list is invalid, or no matching proposal exists.
         BadSession,
     }
     #[sails_rs::sails_type(crate = sails_rs)]
@@ -305,21 +305,29 @@ pub mod pool {
         pub name: String,
         pub symbol: String,
         pub decimals: u8,
-        /// VARA per kVARA scaled by 1e18, projected to now.
+        /// VARA per kVARA scaled by 1e18: distributable VARA over shares, now.
         pub rate: U256,
+        /// Annualised release rate of the rewards currently vesting, over distributable VARA.
+        /// Zero once the current tranche has fully vested.
         pub apy_bps: u32,
         pub instant_fee_bps: u32,
         pub unbond_period_secs: u64,
+        pub vesting_period_secs: u64,
         pub total_shares: U256,
-        /// VARA owed to share holders at the projected rate.
+        /// VARA owed to share holders: the distributable amount.
         pub total_assets: U256,
-        /// VARA the pool physically holds for payouts (stakes plus funded rewards).
+        /// VARA the pool physically holds (stakes, rewards, fees, unbonds).
         pub reserve: U256,
+        /// Reserve minus fees, unbonds and rewards still vesting.
+        pub distributable: U256,
+        /// Rewards not yet released.
+        pub locked_rewards: U256,
+        /// When the current tranche is fully vested (0 when nothing is vesting).
+        pub vesting_ends_at: u64,
         pub fees_accrued: U256,
         pub unbonding_total: U256,
         pub min_stake: U256,
         pub paused: bool,
-        pub last_accrual_at: u64,
     }
     #[sails_rs::sails_type(crate = sails_rs)]
     #[derive(PartialEq, Clone, Debug)]
@@ -328,7 +336,9 @@ pub mod pool {
         pub assets: U256,
     }
     /// A session key registered by an owner: messages signed by `key` act for the owner until
-    /// `expires_at`. Payouts always go to the owner, never to the key.
+    /// `expires_at`. Payouts always go to the owner, never to the key. A session is proposed by
+    /// the owner and only takes effect once the key itself accepts it, so nobody can bind an
+    /// address they do not control.
     #[sails_rs::sails_type(crate = sails_rs)]
     #[derive(PartialEq, Clone, Debug)]
     pub struct Session {
@@ -364,7 +374,10 @@ pub mod pool {
 
     pub trait Pool {
         type Env: sails_rs::client::GearEnv;
-        fn accrue(&mut self) -> sails_rs::client::PendingCall<io::Accrue, Self::Env>;
+        fn accept_session(
+            &mut self,
+            owner: ActorId,
+        ) -> sails_rs::client::PendingCall<io::AcceptSession, Self::Env>;
         fn claim(&mut self, id: u64) -> sails_rs::client::PendingCall<io::Claim, Self::Env>;
         fn collect_fees(
             &mut self,
@@ -379,6 +392,10 @@ pub mod pool {
         fn fund_rewards(&mut self) -> sails_rs::client::PendingCall<io::FundRewards, Self::Env>;
         fn info(&self) -> sails_rs::client::PendingCall<io::Info, Self::Env>;
         fn pause(&mut self) -> sails_rs::client::PendingCall<io::Pause, Self::Env>;
+        fn pending_session(
+            &self,
+            owner: ActorId,
+        ) -> sails_rs::client::PendingCall<io::PendingSession, Self::Env>;
         fn position(
             &self,
             account: ActorId,
@@ -406,9 +423,9 @@ pub mod pool {
         ) -> sails_rs::client::PendingCall<io::SessionOwner, Self::Env>;
         fn set_config(
             &mut self,
-            apy_bps: u32,
             instant_fee_bps: u32,
             unbond_period_secs: u64,
+            vesting_period_secs: u64,
         ) -> sails_rs::client::PendingCall<io::SetConfig, Self::Env>;
         fn stake(&mut self) -> sails_rs::client::PendingCall<io::Stake, Self::Env>;
         fn transfer_admin(
@@ -429,13 +446,16 @@ pub mod pool {
 
     impl sails_rs::client::Identifiable for PoolImpl {
         const INTERFACE_ID: sails_rs::InterfaceId =
-            sails_rs::InterfaceId::from_bytes_8([211, 50, 255, 16, 94, 50, 244, 113]);
+            sails_rs::InterfaceId::from_bytes_8([115, 98, 2, 242, 202, 124, 142, 131]);
     }
 
     impl<E: sails_rs::client::GearEnv> Pool for sails_rs::client::Service<PoolImpl, E> {
         type Env = E;
-        fn accrue(&mut self) -> sails_rs::client::PendingCall<io::Accrue, Self::Env> {
-            self.pending_call(())
+        fn accept_session(
+            &mut self,
+            owner: ActorId,
+        ) -> sails_rs::client::PendingCall<io::AcceptSession, Self::Env> {
+            self.pending_call((owner,))
         }
         fn claim(&mut self, id: u64) -> sails_rs::client::PendingCall<io::Claim, Self::Env> {
             self.pending_call((id,))
@@ -462,6 +482,12 @@ pub mod pool {
         }
         fn pause(&mut self) -> sails_rs::client::PendingCall<io::Pause, Self::Env> {
             self.pending_call(())
+        }
+        fn pending_session(
+            &self,
+            owner: ActorId,
+        ) -> sails_rs::client::PendingCall<io::PendingSession, Self::Env> {
+            self.pending_call((owner,))
         }
         fn position(
             &self,
@@ -509,11 +535,11 @@ pub mod pool {
         }
         fn set_config(
             &mut self,
-            apy_bps: u32,
             instant_fee_bps: u32,
             unbond_period_secs: u64,
+            vesting_period_secs: u64,
         ) -> sails_rs::client::PendingCall<io::SetConfig, Self::Env> {
-            self.pending_call((apy_bps, instant_fee_bps, unbond_period_secs))
+            self.pending_call((instant_fee_bps, unbond_period_secs, vesting_period_secs))
         }
         fn stake(&mut self) -> sails_rs::client::PendingCall<io::Stake, Self::Env> {
             self.pending_call(())
@@ -540,27 +566,28 @@ pub mod pool {
 
     pub mod io {
         use super::*;
-        sails_rs::io_struct_impl!(Accrue () -> U256, 0, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(AcceptSession (owner: ActorId) -> super::Result<super::Session, super::PoolError, >, 0, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(Claim (id: u64) -> super::Result<U256, super::PoolError, >, 1, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(CollectFees (to: ActorId) -> super::Result<U256, super::PoolError, >, 2, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(CreateSession (key: ActorId, duration_secs: u64, actions: Vec<super::SessionAction>) -> super::Result<super::Session, super::PoolError, >, 3, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(FundRewards () -> super::Result<U256, super::PoolError, >, 4, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(Info () -> super::PoolInfo, 5, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(Pause () -> super::Result<bool, super::PoolError, >, 6, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Position (account: ActorId) -> super::Position, 7, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(PreviewStake (assets: U256) -> U256, 8, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(PreviewUnstake (shares: U256) -> super::UnstakePreview, 9, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Rate () -> U256, 10, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(RequestUnbond (shares: U256) -> super::Result<super::Unbond, super::PoolError, >, 11, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Resume () -> super::Result<bool, super::PoolError, >, 12, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(RevokeSession () -> bool, 13, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Session (owner: ActorId) -> super::Option<super::Session, >, 14, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(SessionOwner (key: ActorId) -> super::Option<ActorId, >, 15, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(SetConfig (apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> super::Result<bool, super::PoolError, >, 16, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Stake () -> super::Result<U256, super::PoolError, >, 17, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(TransferAdmin (to: ActorId) -> super::Result<bool, super::PoolError, >, 18, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Unbonds (account: ActorId) -> Vec<super::Unbond>, 19, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Unstake (shares: U256) -> super::Result<super::UnstakePreview, super::PoolError, >, 20, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(PendingSession (owner: ActorId) -> super::Option<super::Session, >, 7, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Position (account: ActorId) -> super::Position, 8, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(PreviewStake (assets: U256) -> U256, 9, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(PreviewUnstake (shares: U256) -> super::UnstakePreview, 10, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Rate () -> U256, 11, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(RequestUnbond (shares: U256) -> super::Result<super::Unbond, super::PoolError, >, 12, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Resume () -> super::Result<bool, super::PoolError, >, 13, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(RevokeSession () -> bool, 14, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Session (owner: ActorId) -> super::Option<super::Session, >, 15, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(SessionOwner (key: ActorId) -> super::Option<ActorId, >, 16, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(SetConfig (instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> super::Result<bool, super::PoolError, >, 17, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Stake () -> super::Result<U256, super::PoolError, >, 18, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(TransferAdmin (to: ActorId) -> super::Result<bool, super::PoolError, >, 19, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Unbonds (account: ActorId) -> Vec<super::Unbond>, 20, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Unstake (shares: U256) -> super::Result<super::UnstakePreview, super::PoolError, >, 21, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -570,35 +597,40 @@ pub mod pool {
         #[derive(PartialEq, Debug)]
         pub enum PoolEvents {
             #[codec(index = 0)]
-            Accrued { rate: U256, total_assets: U256 },
-            #[codec(index = 1)]
             AdminTransferred { from: ActorId, to: ActorId },
-            #[codec(index = 2)]
+            #[codec(index = 1)]
             Claimed {
                 owner: ActorId,
                 id: u64,
                 assets: U256,
             },
-            #[codec(index = 3)]
+            #[codec(index = 2)]
             ConfigChanged {
-                apy_bps: u32,
                 instant_fee_bps: u32,
                 unbond_period_secs: u64,
+                vesting_period_secs: u64,
             },
-            #[codec(index = 4)]
+            #[codec(index = 3)]
             FeesCollected { to: ActorId, assets: U256 },
-            #[codec(index = 5)]
+            #[codec(index = 4)]
             Paused { by: ActorId },
-            #[codec(index = 6)]
+            #[codec(index = 5)]
             Resumed { by: ActorId },
-            #[codec(index = 7)]
+            #[codec(index = 6)]
             RewardsFunded {
                 from: ActorId,
                 assets: U256,
                 reserve: U256,
+                vesting_ends_at: u64,
+            },
+            #[codec(index = 7)]
+            SessionAccepted {
+                owner: ActorId,
+                key: ActorId,
+                expires_at: u64,
             },
             #[codec(index = 8)]
-            SessionCreated {
+            SessionProposed {
                 owner: ActorId,
                 key: ActorId,
                 expires_at: u64,
@@ -633,15 +665,15 @@ pub mod pool {
         impl PoolEvents {
             pub fn entry_id(&self) -> u16 {
                 match self {
-                    Self::Accrued { .. } => 0,
-                    Self::AdminTransferred { .. } => 1,
-                    Self::Claimed { .. } => 2,
-                    Self::ConfigChanged { .. } => 3,
-                    Self::FeesCollected { .. } => 4,
-                    Self::Paused { .. } => 5,
-                    Self::Resumed { .. } => 6,
-                    Self::RewardsFunded { .. } => 7,
-                    Self::SessionCreated { .. } => 8,
+                    Self::AdminTransferred { .. } => 0,
+                    Self::Claimed { .. } => 1,
+                    Self::ConfigChanged { .. } => 2,
+                    Self::FeesCollected { .. } => 3,
+                    Self::Paused { .. } => 4,
+                    Self::Resumed { .. } => 5,
+                    Self::RewardsFunded { .. } => 6,
+                    Self::SessionAccepted { .. } => 7,
+                    Self::SessionProposed { .. } => 8,
                     Self::SessionRevoked { .. } => 9,
                     Self::Staked { .. } => 10,
                     Self::UnbondRequested { .. } => 11,

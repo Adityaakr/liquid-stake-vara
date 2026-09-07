@@ -42,7 +42,7 @@ service Vft@0x72760694e848b0e7 {
             InsufficientShares,
             InsufficientBalance,
             InsufficientAllowance,
-            /// The pool's VARA reserve cannot cover this payout yet; nothing changed.
+            /// The pool's distributable VARA cannot cover this payout; nothing changed.
             InsufficientReserve {
                 available: U256,
             },
@@ -59,18 +59,14 @@ service Vft@0x72760694e848b0e7 {
             SessionExpired,
             /// The session key acting for the owner may not perform this action.
             SessionNotAllowed,
-            /// Session key, duration or action list is invalid.
+            /// Session key, duration or action list is invalid, or no matching proposal exists.
             BadSession,
         }
     }
 }
 
-service Pool@0xd332ff105e32f471 {
+service Pool@0x736202f2ca7c8e83 {
     events {
-        Accrued {
-            rate: U256,
-            total_assets: U256,
-        },
         AdminTransferred {
             from: ActorId,
             to: ActorId,
@@ -81,9 +77,9 @@ service Pool@0xd332ff105e32f471 {
             assets: U256,
         },
         ConfigChanged {
-            apy_bps: u32,
             instant_fee_bps: u32,
             unbond_period_secs: u64,
+            vesting_period_secs: u64,
         },
         FeesCollected {
             to: ActorId,
@@ -99,8 +95,14 @@ service Pool@0xd332ff105e32f471 {
             from: ActorId,
             assets: U256,
             reserve: U256,
+            vesting_ends_at: u64,
         },
-        SessionCreated {
+        SessionAccepted {
+            owner: ActorId,
+            key: ActorId,
+            expires_at: u64,
+        },
+        SessionProposed {
             owner: ActorId,
             key: ActorId,
             expires_at: u64,
@@ -130,7 +132,7 @@ service Pool@0xd332ff105e32f471 {
         },
     }
     functions {
-        Accrue() -> U256;
+        AcceptSession(owner: ActorId) -> Result<Session, PoolError>;
         Claim(id: u64) -> Result<U256, PoolError>;
         CollectFees(to: ActorId) -> Result<U256, PoolError>;
         CreateSession(key: ActorId, duration_secs: u64, actions: [SessionAction]) -> Result<Session, PoolError>;
@@ -138,6 +140,8 @@ service Pool@0xd332ff105e32f471 {
         @query
         Info() -> PoolInfo;
         Pause() -> Result<bool, PoolError>;
+        @query
+        PendingSession(owner: ActorId) -> Option<Session>;
         @query
         Position(account: ActorId) -> Position;
         @query
@@ -153,7 +157,7 @@ service Pool@0xd332ff105e32f471 {
         Session(owner: ActorId) -> Option<Session>;
         @query
         SessionOwner(key: ActorId) -> Option<ActorId>;
-        SetConfig(apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> Result<bool, PoolError>;
+        SetConfig(instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> Result<bool, PoolError>;
         Stake() -> Result<U256, PoolError>;
         TransferAdmin(to: ActorId) -> Result<bool, PoolError>;
         @query
@@ -171,7 +175,7 @@ service Pool@0xd332ff105e32f471 {
             InsufficientShares,
             InsufficientBalance,
             InsufficientAllowance,
-            /// The pool's VARA reserve cannot cover this payout yet; nothing changed.
+            /// The pool's distributable VARA cannot cover this payout; nothing changed.
             InsufficientReserve {
                 available: U256,
             },
@@ -188,7 +192,7 @@ service Pool@0xd332ff105e32f471 {
             SessionExpired,
             /// The session key acting for the owner may not perform this action.
             SessionNotAllowed,
-            /// Session key, duration or action list is invalid.
+            /// Session key, duration or action list is invalid, or no matching proposal exists.
             BadSession,
         }
         struct PoolInfo {
@@ -196,28 +200,38 @@ service Pool@0xd332ff105e32f471 {
             name: String,
             symbol: String,
             decimals: u8,
-            /// VARA per kVARA scaled by 1e18, projected to now.
+            /// VARA per kVARA scaled by 1e18: distributable VARA over shares, now.
             rate: U256,
+            /// Annualised release rate of the rewards currently vesting, over distributable VARA.
+            /// Zero once the current tranche has fully vested.
             apy_bps: u32,
             instant_fee_bps: u32,
             unbond_period_secs: u64,
+            vesting_period_secs: u64,
             total_shares: U256,
-            /// VARA owed to share holders at the projected rate.
+            /// VARA owed to share holders: the distributable amount.
             total_assets: U256,
-            /// VARA the pool physically holds for payouts (stakes plus funded rewards).
+            /// VARA the pool physically holds (stakes, rewards, fees, unbonds).
             reserve: U256,
+            /// Reserve minus fees, unbonds and rewards still vesting.
+            distributable: U256,
+            /// Rewards not yet released.
+            locked_rewards: U256,
+            /// When the current tranche is fully vested (0 when nothing is vesting).
+            vesting_ends_at: u64,
             fees_accrued: U256,
             unbonding_total: U256,
             min_stake: U256,
             paused: bool,
-            last_accrual_at: u64,
         }
         struct Position {
             shares: U256,
             assets: U256,
         }
         /// A session key registered by an owner: messages signed by `key` act for the owner until
-        /// `expires_at`. Payouts always go to the owner, never to the key.
+        /// `expires_at`. Payouts always go to the owner, never to the key. A session is proposed by
+        /// the owner and only takes effect once the key itself accepts it, so nobody can bind an
+        /// address they do not control.
         struct Session {
             key: ActorId,
             expires_at: u64,
@@ -247,10 +261,10 @@ service Pool@0xd332ff105e32f471 {
 
 program VaraPool {
     constructors {
-        New(name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, initial_rate: U256);
+        New(name: String, symbol: String, decimals: u8, instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64, initial_rate: U256);
     }
     services {
         Vft@0x72760694e848b0e7,
-        Pool@0xd332ff105e32f471,
+        Pool@0x736202f2ca7c8e83,
     }
 }

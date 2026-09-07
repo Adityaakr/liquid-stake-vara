@@ -4,7 +4,7 @@ import { ChevronRight } from 'lucide-react';
 import { AmountField, Badge, Bento, Button, Dialog, Stat, TokenIcon, type TokenSymbol } from '@/ui';
 import { useStore } from '@/chain/store';
 import type { DepositAsset } from '@/chain/types';
-import { accrueRate, assetsToShares, sharesToAssets, validateAmount } from '@/domain/math';
+import { assetsToShares, projectRate, sharesToAssets, validateAmount } from '@/domain/math';
 import { bpsToPercent, formatCompactUsd, formatCountdown, formatRate, formatUnits, parseUnits } from '@/domain/format';
 import { BPS, INSTANT_UNSTAKE_FEE_BPS, STABLE_DECIMALS, UNBONDING_DAYS, VARA_DECIMALS, type VaultAsset } from '@/domain/protocol';
 import { Row, useNow } from './bits';
@@ -15,6 +15,8 @@ type Card = {
   receipt: TokenSymbol;
   decimals: number;
   apyBps: bigint;
+  /** ms timestamp the current rewards tranche is vested at; the rate stops projecting there. */
+  vestingEndsAt: number;
   /** receipt -> asset rate at `at`, scaled 1e9 */
   rate: bigint;
   at: number;
@@ -61,7 +63,7 @@ function VaultCard({ card }: { card: Card }) {
   const parsed = useMemo(() => parseUnits(amt, decimals), [amt, decimals]);
   const apy = bpsToPercent(card.apyBps);
   const busy = tx.stage === 'broadcast';
-  const rateNow = accrueRate(card.rate, card.apyBps, now - card.at);
+  const rateNow = projectRate(card.rate, card.apyBps, card.at, now, card.vestingEndsAt);
   const value = sharesToAssets(card.receipts, rateNow);
   const earned = card.principal !== null && value > card.principal ? value - card.principal : 0n;
   const inYear = (x: bigint) => x + (x * card.apyBps) / 10_000n;
@@ -89,7 +91,7 @@ function VaultCard({ card }: { card: Card }) {
     const receipts = assetsToShares(a, rateNow);
     const ok = isVara
       ? await run('Stake', (addr) => adapter.stake(addr, a), { title: `Staked ${fmt(a, decimals)} VARA`, detail: `You hold ${fmt(receipts, decimals)} kVARA. Rewards compound into the rate every era.` })
-      : await run(`Deposit ${asset}`, (addr) => adapter.depositVault(addr, asset, a), (r) => ({ title: `Deposited ${fmt(a, decimals)} ${asset}`, detail: `You hold ${fmt((r as { shares?: bigint }).shares ?? receipts, decimals)} more ${rec}. Yield accrues to the rate every second.` }));
+      : await run(`Deposit ${asset}`, (addr) => adapter.depositVault(addr, asset, a), (r) => ({ title: `Deposited ${fmt(a, decimals)} ${asset}`, detail: `You hold ${fmt((r as { shares?: bigint }).shares ?? receipts, decimals)} more ${rec}. The rate rises as rewards vest.` }));
     if (ok) close();
   };
 
@@ -242,6 +244,7 @@ export function VaultsPage() {
       receipt: `k${asset}` as TokenSymbol,
       decimals: STABLE_DECIMALS,
       apyBps: v?.apyBps ?? 0n,
+      vestingEndsAt: v?.vestingEndsAt ?? 0,
       rate: v?.rate ?? 1_000_000_000n,
       at,
       tvlUsd: v?.tvlUsd ?? 0,
@@ -260,6 +263,7 @@ export function VaultsPage() {
     receipt: 'kVARA',
     decimals: VARA_DECIMALS,
     apyBps: stats?.stakeApyBps ?? 0n,
+    vestingEndsAt: stats?.stakeVestingEndsAt ?? 0,
     rate: stats?.rate ?? 1_000_000_000n,
     at,
     tvlUsd: stats ? (Number(stats.totalStakedVara) / 10 ** VARA_DECIMALS) * stats.varaPriceUsd : 0,
@@ -286,7 +290,7 @@ export function VaultsPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '16px 0 14px', flexWrap: 'wrap' }}>
               <FlowChip tok="USDC" label="deposit" /><Arrow />
               <FlowChip tok="kUSDC" label="receive kUSDC at the current rate" /><Arrow />
-              <FlowChip label="rate rises every second" /><Arrow />
+              <FlowChip label="rate rises as rewards vest" /><Arrow />
               <FlowChip label="exit instantly or unbond" />
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 2, flexWrap: 'wrap' }}>
@@ -296,7 +300,7 @@ export function VaultsPage() {
             </div>
           </div>
           <p style={{ fontSize: 13, color: 'var(--text-3)', lineHeight: 1.6, maxWidth: 320 }}>
-            {adapter.kind === 'gear' ? 'USDC and USDT here are demo tokens on Vara mainnet with no monetary value. Yield on them is minted by the vault so the full flow can be tested end to end.' : 'Simulated protocol: figures are illustrative and nothing is sent on chain.'}
+            {adapter.kind === 'gear' ? 'USDC and USDT here are demo tokens on Vara mainnet with no monetary value. Yield on them is real tokens someone funded into the vault, released over the vesting period; the vault never mints.' : 'Simulated protocol: figures are illustrative and nothing is sent on chain.'}
           </p>
         </div>
       </Bento>

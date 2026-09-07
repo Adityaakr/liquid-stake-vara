@@ -59,6 +59,14 @@ export function accrueRate(rate: bigint, apyBps: bigint, elapsedMs: number): big
   return rate + (rate * apyBps * BigInt(Math.floor(elapsedMs))) / (BPS * YEAR_MS);
 }
 
+/**
+ * Project a rate read at `at` to `now`. Rewards vest linearly, so between two reads the rate grows
+ * at the reported APY, but never past the end of the current tranche (`vestingEndsAt`, 0 = none).
+ */
+export function projectRate(rate: bigint, apyBps: bigint, at: number, now: number, vestingEndsAt: number): bigint {
+  return accrueRate(rate, apyBps, Math.min(now, vestingEndsAt) - at);
+}
+
 export type AmountValidation = { ok: true } | { ok: false; reason: 'empty' | 'zero' | 'insufficient' | 'invalid' };
 
 /** `balance` null means the balance is still loading: the insufficient check is skipped. */

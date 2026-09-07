@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assetsToShares, instantUnstakeOut, nativeUnstakeOut, projectedYield, sharesToAssets, kVaraToVara, validateAmount, varaToKVara } from './math';
+import { accrueRate, assetsToShares, instantUnstakeOut, nativeUnstakeOut, projectRate, projectedYield, sharesToAssets, kVaraToVara, validateAmount, varaToKVara } from './math';
 import { formatRate, formatUnits, formatVara, parseRate, parseUnits, parseVara, shortAddress, formatCountdown } from './format';
 import { ONE_VARA, RATE_SCALE } from './protocol';
 
@@ -51,6 +51,14 @@ describe('vault shares', () => {
 describe('projection', () => {
   it('14.2% for a year on 1000 VARA is 142 VARA', () => {
     expect(formatVara(projectedYield(1000n * ONE_VARA, 1420n, 365))).toBe('142.00');
+  });
+  it('projects a rate between reads but never past the end of the vesting tranche', () => {
+    const at = 1_000_000;
+    const day = 86_400_000;
+    expect(projectRate(RATE_SCALE, 3650n, at, at + day, at + 7 * day)).toBe(accrueRate(RATE_SCALE, 3650n, day));
+    expect(projectRate(RATE_SCALE, 3650n, at, at + 30 * day, at + 7 * day)).toBe(accrueRate(RATE_SCALE, 3650n, 7 * day));
+    expect(projectRate(RATE_SCALE, 0n, at, at + day, 0)).toBe(RATE_SCALE);
+    expect(projectRate(RATE_SCALE, 3650n, at, at + day, Infinity)).toBe(accrueRate(RATE_SCALE, 3650n, day));
   });
 });
 

@@ -1,7 +1,7 @@
 
 !@sails: 1.0.1
 
-service Vft@0xb938c6ed1b8ca8d0 {
+service Vft@0x886e850e2c9f318b {
     events {
         Approval {
             owner: ActorId,
@@ -42,6 +42,10 @@ service Vft@0xb938c6ed1b8ca8d0 {
             InsufficientShares,
             InsufficientBalance,
             InsufficientAllowance,
+            /// The vault's distributable assets cannot cover this payout; nothing changed.
+            InsufficientReserve {
+                available: U256,
+            },
             Unauthorized,
             Overflow,
             BadConfig,
@@ -61,18 +65,14 @@ service Vft@0xb938c6ed1b8ca8d0 {
             SessionExpired,
             /// The session key acting for the owner may not perform this action.
             SessionNotAllowed,
-            /// Session key, duration or action list is invalid.
+            /// Session key, duration or action list is invalid, or no matching proposal exists.
             BadSession,
         }
     }
 }
 
-service Vault@0x535c61105b77a62a {
+service Vault@0x1ed36241921cfe39 {
     events {
-        Accrued {
-            rate: U256,
-            total_assets: U256,
-        },
         AdminTransferred {
             from: ActorId,
             to: ActorId,
@@ -83,9 +83,9 @@ service Vault@0x535c61105b77a62a {
             assets: U256,
         },
         ConfigChanged {
-            apy_bps: u32,
             instant_fee_bps: u32,
             unbond_period_secs: u64,
+            vesting_period_secs: u64,
         },
         Deposited {
             owner: ActorId,
@@ -107,13 +107,21 @@ service Vault@0x535c61105b77a62a {
             fee: U256,
             rate: U256,
         },
-        ReserveToppedUp {
-            assets: U256,
-        },
         Resumed {
             by: ActorId,
         },
-        SessionCreated {
+        RewardsFunded {
+            from: ActorId,
+            assets: U256,
+            holdings: U256,
+            vesting_ends_at: u64,
+        },
+        SessionAccepted {
+            owner: ActorId,
+            key: ActorId,
+            expires_at: u64,
+        },
+        SessionProposed {
             owner: ActorId,
             key: ActorId,
             expires_at: u64,
@@ -130,14 +138,17 @@ service Vault@0x535c61105b77a62a {
         },
     }
     functions {
-        Accrue() -> U256;
+        AcceptSession(owner: ActorId) -> Result<Session, VaultError>;
         Claim(id: u64) -> Result<U256, VaultError>;
         CollectFees(to: ActorId) -> Result<U256, VaultError>;
         CreateSession(key: ActorId, duration_secs: u64, actions: [SessionAction]) -> Result<Session, VaultError>;
         Deposit(assets: U256) -> Result<U256, VaultError>;
+        FundRewards(assets: U256) -> Result<U256, VaultError>;
         @query
         Info() -> VaultInfo;
         Pause() -> Result<bool, VaultError>;
+        @query
+        PendingSession(owner: ActorId) -> Option<Session>;
         @query
         Position(account: ActorId) -> Position;
         @query
@@ -154,8 +165,7 @@ service Vault@0x535c61105b77a62a {
         Session(owner: ActorId) -> Option<Session>;
         @query
         SessionOwner(key: ActorId) -> Option<ActorId>;
-        SetConfig(apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64) -> Result<bool, VaultError>;
-        TopUpReserve(assets: U256) -> Result<bool, VaultError>;
+        SetConfig(instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> Result<bool, VaultError>;
         TransferAdmin(to: ActorId) -> Result<bool, VaultError>;
         @query
         Unbonds(account: ActorId) -> [Unbond];
@@ -171,7 +181,9 @@ service Vault@0x535c61105b77a62a {
             net: U256,
         }
         /// A session key registered by an owner: messages signed by `key` act for the owner until
-        /// `expires_at`. Payouts always go to the owner, never to the key.
+        /// `expires_at`. Payouts always go to the owner, never to the key. A session is proposed by
+        /// the owner and only takes effect once the key itself accepts it, so nobody can bind an
+        /// address they do not control.
         struct Session {
             key: ActorId,
             expires_at: u64,
@@ -201,6 +213,10 @@ service Vault@0x535c61105b77a62a {
             InsufficientShares,
             InsufficientBalance,
             InsufficientAllowance,
+            /// The vault's distributable assets cannot cover this payout; nothing changed.
+            InsufficientReserve {
+                available: U256,
+            },
             Unauthorized,
             Overflow,
             BadConfig,
@@ -220,7 +236,7 @@ service Vault@0x535c61105b77a62a {
             SessionExpired,
             /// The session key acting for the owner may not perform this action.
             SessionNotAllowed,
-            /// Session key, duration or action list is invalid.
+            /// Session key, duration or action list is invalid, or no matching proposal exists.
             BadSession,
         }
         struct VaultInfo {
@@ -229,31 +245,39 @@ service Vault@0x535c61105b77a62a {
             name: String,
             symbol: String,
             decimals: u8,
-            /// Assets per share scaled by 1e18, projected to now.
+            /// Assets per share scaled by 1e18: distributable assets over shares, now.
             rate: U256,
+            /// Annualised release rate of the rewards currently vesting, over distributable assets.
+            /// Zero once the current tranche has fully vested.
             apy_bps: u32,
             instant_fee_bps: u32,
             unbond_period_secs: u64,
+            vesting_period_secs: u64,
             total_shares: U256,
-            /// Assets owed to share holders at the projected rate.
+            /// Assets owed to share holders: the distributable amount.
             total_assets: U256,
-            /// Underlying the vault physically holds.
+            /// Underlying the vault physically holds (deposits, rewards, fees, unbonds).
             holdings: U256,
+            /// Holdings minus fees, unbonds and rewards still vesting.
+            distributable: U256,
+            /// Rewards not yet released.
+            locked_rewards: U256,
+            /// When the current tranche is fully vested (0 when nothing is vesting).
+            vesting_ends_at: u64,
             fees_accrued: U256,
             unbonding_total: U256,
             min_deposit: U256,
             paused: bool,
-            last_accrual_at: u64,
         }
     }
 }
 
 program Vault {
     constructors {
-        New(underlying: ActorId, name: String, symbol: String, decimals: u8, apy_bps: u32, instant_fee_bps: u32, unbond_period_secs: u64, initial_rate: U256);
+        New(underlying: ActorId, name: String, symbol: String, decimals: u8, instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64, initial_rate: U256);
     }
     services {
-        Vft@0xb938c6ed1b8ca8d0,
-        Vault@0x535c61105b77a62a,
+        Vft@0x886e850e2c9f318b,
+        Vault@0x1ed36241921cfe39,
     }
 }

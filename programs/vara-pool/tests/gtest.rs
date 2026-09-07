@@ -15,9 +15,9 @@ const BOB: u64 = DEFAULT_USER_BOB;
 const CHARLIE: u64 = DEFAULT_USER_CHARLIE;
 const ONE: u128 = 1_000_000_000_000; // 12 decimals
 const SCALE: u128 = 1_000_000_000_000_000_000;
-const APY_BPS: u32 = 100_000; // 1000% so accrual is visible within a few thousand blocks
 const FEE_BPS: u32 = 30;
 const UNBOND_SECS: u64 = 60; // 20 blocks
+const VESTING_SECS: u64 = 3_600; // the minimum: a tranche vests over 1,200 blocks
 const BLOCK_MS: u64 = 3000;
 
 type PoolActor = Actor<VaraPoolClientProgram, GtestEnv>;
@@ -53,7 +53,7 @@ impl World {
     }
 }
 
-/// Deploy the pool as Alice with a zero APY (share math stays exact); accrual tests switch it on.
+/// Deploy the pool as Alice at rate 1.0 with a one minute vesting period.
 async fn setup() -> World {
     let env = GtestEnv::system_default();
     for user in [BOB, CHARLIE] {
@@ -62,7 +62,7 @@ async fn setup() -> World {
     let code = env.system().submit_code(::vara_pool::WASM_BINARY);
     let pool = env
         .deploy::<VaraPoolClientProgram>(code, b"kvara".to_vec())
-        .new("Vale kVARA".into(), "kVARA".into(), 12, 0, FEE_BPS, UNBOND_SECS, U256::zero())
+        .new("Vale kVARA".into(), "kVARA".into(), 12, FEE_BPS, UNBOND_SECS, VESTING_SECS, U256::zero())
         .await
         .unwrap();
     // Programs need balance to pay for the messages they send.
@@ -78,9 +78,11 @@ async fn constructor_state_and_metadata() {
     assert_eq!(info.symbol, "kVARA");
     assert_eq!(info.decimals, 12);
     assert_eq!(info.rate, U256::from(SCALE));
-    assert_eq!(info.apy_bps, 0);
+    assert_eq!(info.apy_bps, 0, "nothing is vesting");
     assert_eq!(info.instant_fee_bps, FEE_BPS);
     assert_eq!(info.unbond_period_secs, UNBOND_SECS);
+    assert_eq!(info.vesting_period_secs, VESTING_SECS);
+    assert_eq!(info.locked_rewards, U256::zero());
     assert_eq!(info.total_shares, U256::zero());
     assert_eq!(info.reserve, U256::zero());
     assert!(!info.paused);
@@ -149,31 +151,63 @@ async fn unstake_pays_net_of_fee_from_the_reserve() {
 }
 
 #[tokio::test]
-async fn rate_accrues_and_yield_is_paid_from_funded_rewards() {
+async fn rewards_vest_linearly_and_are_paid_on_exit() {
     let w = setup().await;
-    // Stake at exactly 1.0, then switch the APY on (and the fee off, so the payout exceeds the
-    // principal) while the share count stays a round 100.
     w.pool_as(BOB).pool().stake().with_value(100 * ONE).await.unwrap().unwrap();
-    w.pool.pool().set_config(APY_BPS, 0, UNBOND_SECS).await.unwrap().unwrap();
-    w.skip_secs(3_600); // 1000% APY over an hour ≈ +0.114%
-    let rate = w.pool.pool().rate().await.unwrap();
-    assert!(rate > U256::from(SCALE), "rate moved: {rate}");
-    let owed = w.pool.pool().position(actor(BOB)).await.unwrap().assets;
-    assert!(owed > u(100 * ONE), "position grew: {owed}");
-
-    // Only the principal is in the reserve: paying out everything needs rewards first.
-    let res = w.pool_as(BOB).pool().unstake(u(100 * ONE)).await.unwrap();
-    assert!(matches!(res, Err(pool::PoolError::InsufficientReserve { .. })), "{res:?}");
-    assert_eq!(w.shares(actor(BOB)).await, u(100 * ONE), "position intact");
-
+    let mut events = w.pool.pool().listen().await.unwrap();
     let reserve = w.pool_as(CHARLIE).pool().fund_rewards().with_value(10 * ONE).await.unwrap().unwrap();
     assert_eq!(reserve, u(110 * ONE));
+    let (_, ev) = events.next().await.unwrap();
+    assert!(matches!(ev, PoolEvents::RewardsFunded { from, assets, .. } if from == actor(CHARLIE) && assets == u(10 * ONE)), "{ev:?}");
+
+    // Funding does not jump the rate: the tranche is locked and releases over the period
+    // (one block later, 1/1200 of it is out).
+    let info = w.pool.pool().info().await.unwrap();
+    assert!(info.rate <= U256::from(SCALE + SCALE / 10_000), "rate barely moved at funding: {}", info.rate);
+    assert!(info.locked_rewards > u(9_990 * ONE / 1_000), "locked: {}", info.locked_rewards);
+    assert!(info.distributable < u(100_010 * ONE / 1_000), "distributable: {}", info.distributable);
+    assert!(info.apy_bps > 0, "the drip is visible as an APY: {}", info.apy_bps);
+    assert!(info.vesting_ends_at > 0);
+
+    w.skip_secs(VESTING_SECS / 2);
+    let mid = w.pool.pool().rate().await.unwrap();
+    assert!(mid > U256::from(SCALE) && mid < U256::from(SCALE + SCALE / 10), "half way: {mid}");
+    let owed = w.pool.pool().position(actor(BOB)).await.unwrap().assets;
+    assert!(owed > u(100 * ONE) && owed < u(110 * ONE), "position grew: {owed}");
+
+    w.skip_secs(VESTING_SECS);
+    let info = w.pool.pool().info().await.unwrap();
+    assert_eq!(info.rate, U256::from(SCALE + SCALE / 10), "fully vested: 1.10");
+    assert_eq!(info.locked_rewards, U256::zero());
+    assert_eq!((info.apy_bps, info.vesting_ends_at), (0, 0), "no tranche left");
+
     let bob_before = w.vara(BOB);
     let out = w.pool_as(BOB).pool().unstake(u(100 * ONE)).await.unwrap().unwrap();
-    assert!(out.assets > u(100 * ONE), "yield paid: {}", out.assets);
-    assert!(w.vara(BOB) > bob_before + 100 * ONE - ONE, "bob got principal plus yield");
+    assert_eq!(out.assets, u(110 * ONE), "principal plus the whole tranche");
+    assert!(w.vara(BOB) > bob_before + 109 * ONE, "bob got principal plus yield");
     let info = w.pool.pool().info().await.unwrap();
     assert_eq!(info.reserve, u(110 * ONE) - out.net);
+    assert_eq!(info.total_shares, U256::zero());
+    assert_eq!(info.rate, U256::from(SCALE + SCALE / 10), "an empty pool keeps its last rate");
+}
+
+#[tokio::test]
+async fn instant_round_trip_earns_nothing() {
+    let w = setup().await;
+    w.pool_as(BOB).pool().stake().with_value(1_000 * ONE).await.unwrap().unwrap();
+    w.pool_as(CHARLIE).pool().fund_rewards().with_value(100 * ONE).await.unwrap().unwrap();
+    w.skip_secs(VESTING_SECS / 2);
+    let bob_owed = w.pool.pool().position(actor(BOB)).await.unwrap().assets;
+
+    // Charlie visits: in, then straight out at the very next block.
+    let charlie_before = w.vara(CHARLIE);
+    let shares = w.pool_as(CHARLIE).pool().stake().with_value(100 * ONE).await.unwrap().unwrap();
+    assert!(shares < u(100 * ONE), "priced at the grown rate: {shares}");
+    let out = w.pool_as(CHARLIE).pool().unstake(shares).await.unwrap().unwrap();
+    assert!(out.assets < u(100 * ONE) + u(ONE / 100), "one block of the pro-rata drip at most: {}", out.assets);
+    assert!(out.net < u(100 * ONE), "the fee makes it a loss: {}", out.net);
+    assert!(w.vara(CHARLIE) < charlie_before, "charlie is down gas and fee");
+    assert!(w.pool.pool().position(actor(BOB)).await.unwrap().assets >= bob_owed, "bob lost nothing to the visit");
 }
 
 #[tokio::test]
@@ -231,14 +265,17 @@ async fn admin_controls_and_fee_collection() {
     assert_eq!(collected, out.fee);
     assert!(w.vara(CHARLIE) > charlie_before, "fees landed");
     assert_eq!(w.pool.pool().collect_fees(actor(CHARLIE)).await.unwrap(), Err(pool::PoolError::ZeroAmount));
-    assert_eq!(w.pool.pool().set_config(MAX_APY_BPS_PLUS_ONE, FEE_BPS, UNBOND_SECS).await.unwrap(), Err(pool::PoolError::BadConfig));
+    assert_eq!(w.pool.pool().set_config(1_001, UNBOND_SECS, VESTING_SECS).await.unwrap(), Err(pool::PoolError::BadConfig));
+    assert_eq!(w.pool.pool().set_config(FEE_BPS, UNBOND_SECS, 60).await.unwrap(), Err(pool::PoolError::BadConfig));
+    w.pool.pool().set_config(50, 30, 7_200).await.unwrap().unwrap();
+    let info = w.pool.pool().info().await.unwrap();
+    assert_eq!((info.instant_fee_bps, info.unbond_period_secs, info.vesting_period_secs), (50, 30, 7_200));
     w.pool.pool().transfer_admin(actor(BOB)).await.unwrap().unwrap();
     assert_eq!(w.pool.pool().pause().await.unwrap(), Err(pool::PoolError::Unauthorized));
 }
-const MAX_APY_BPS_PLUS_ONE: u32 = 100_001;
 
 #[tokio::test]
-async fn session_key_acts_for_its_owner() {
+async fn session_key_acts_for_its_owner_once_it_accepts() {
     let w = setup().await;
     let key = 42u64;
     w.env.system().mint_to(key, DEFAULT_USERS_INITIAL_BALANCE);
@@ -246,7 +283,16 @@ async fn session_key_acts_for_its_owner() {
     let actions = vec![pool::SessionAction::Unstake, pool::SessionAction::Unbond, pool::SessionAction::Claim];
     let s = w.pool_as(BOB).pool().create_session(actor(key), 3_600, actions).await.unwrap().unwrap();
     assert_eq!(s.key, actor(key));
+    // Proposed only: the key is still a plain account with no shares.
+    assert_eq!(w.pool.pool().session_owner(actor(key)).await.unwrap(), None);
+    assert_eq!(w.pool.pool().session(actor(BOB)).await.unwrap(), None);
+    assert_eq!(w.pool.pool().pending_session(actor(BOB)).await.unwrap(), Some(s.clone()));
+    assert_eq!(w.pool_as(key).pool().unstake(u(50 * ONE)).await.unwrap(), Err(pool::PoolError::InsufficientShares));
+
+    let accepted = w.pool_as(key).pool().accept_session(actor(BOB)).await.unwrap().unwrap();
+    assert_eq!(accepted, s);
     assert_eq!(w.pool.pool().session_owner(actor(key)).await.unwrap(), Some(actor(BOB)));
+    assert_eq!(w.pool.pool().pending_session(actor(BOB)).await.unwrap(), None);
 
     // The key unstakes for Bob: Bob's shares burn and Bob (not the key) is paid.
     let bob_before = w.vara(BOB);
@@ -260,6 +306,24 @@ async fn session_key_acts_for_its_owner() {
     assert_eq!(res, Err(pool::PoolError::SessionNotAllowed));
     assert!(w.pool_as(BOB).pool().revoke_session().await.unwrap());
     assert_eq!(w.pool.pool().session(actor(BOB)).await.unwrap(), None);
+    assert_eq!(w.pool.pool().session_owner(actor(key)).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn proposing_a_stranger_as_key_cannot_capture_their_stake() {
+    // Regression: before sessions needed acceptance, anyone could name another account as
+    // "their key" and that account's own stake would mint to the attacker.
+    let w = setup().await;
+    let all = vec![pool::SessionAction::Stake, pool::SessionAction::Unstake, pool::SessionAction::Unbond, pool::SessionAction::Claim];
+    w.pool_as(CHARLIE).pool().create_session(actor(BOB), 3_600, all).await.unwrap().unwrap();
+    let shares = w.pool_as(BOB).pool().stake().with_value(100 * ONE).await.unwrap().unwrap();
+    assert_eq!(w.shares(actor(BOB)).await, shares, "bob's stake is bob's");
+    assert_eq!(w.shares(actor(CHARLIE)).await, U256::zero());
+    // Bob can still exit as himself.
+    let out = w.pool_as(BOB).pool().unstake(shares).await.unwrap().unwrap();
+    assert_eq!(out.assets, u(100 * ONE));
+    // And the stranger accepting nothing means the proposal stays inert; Charlie can drop it.
+    assert!(w.pool_as(CHARLIE).pool().revoke_session().await.unwrap());
 }
 
 #[tokio::test]
@@ -270,7 +334,7 @@ async fn pool_can_start_at_a_higher_rate() {
     let start = U256::from(SCALE + SCALE / 20); // 1.05
     let pool = env
         .deploy::<VaraPoolClientProgram>(code, b"kvara-105".to_vec())
-        .new("Vale kVARA".into(), "kVARA".into(), 12, 0, FEE_BPS, UNBOND_SECS, start)
+        .new("Vale kVARA".into(), "kVARA".into(), 12, FEE_BPS, UNBOND_SECS, VESTING_SECS, start)
         .await
         .unwrap();
     env.system().transfer(ALICE, pool.id(), 100 * ONE, true);

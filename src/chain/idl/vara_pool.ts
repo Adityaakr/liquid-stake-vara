@@ -24,14 +24,14 @@ export class VaraPool {
         return this._programId;
     }
 
-    public newCtorFromCode(code: Uint8Array | Buffer | HexString, name: string, $symbol: string, decimals: number, apy_bps: number, instant_fee_bps: number, unbond_period_secs: number, initial_rate: bigint): TransactionBuilderWithHeader<null> {
+    public newCtorFromCode(code: Uint8Array | Buffer | HexString, name: string, $symbol: string, decimals: number, instant_fee_bps: number, unbond_period_secs: number, vesting_period_secs: number, initial_rate: bigint): TransactionBuilderWithHeader<null> {
         const builder = new TransactionBuilderWithHeader<null>(
             this.api,
             this.registry,
             "upload_program",
             SailsMessageHeader.v1(InterfaceId.zero(), 0, 0),
-            [name, $symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs, initial_rate],
-            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["String", "String", "u8", "u32", "u32", "u64", "U256"]}),
+            [name, $symbol, decimals, instant_fee_bps, unbond_period_secs, vesting_period_secs, initial_rate],
+            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["String", "String", "u8", "u32", "u64", "u64", "U256"]}),
             this._typeResolver.getTypeDeclString("String"),
             code,
         );
@@ -39,14 +39,14 @@ export class VaraPool {
         return builder;
     }
 
-    public newCtorFromCodeId(codeId: `0x${string}`, name: string, $symbol: string, decimals: number, apy_bps: number, instant_fee_bps: number, unbond_period_secs: number, initial_rate: bigint): TransactionBuilderWithHeader<null> {
+    public newCtorFromCodeId(codeId: `0x${string}`, name: string, $symbol: string, decimals: number, instant_fee_bps: number, unbond_period_secs: number, vesting_period_secs: number, initial_rate: bigint): TransactionBuilderWithHeader<null> {
         const builder = new TransactionBuilderWithHeader<null>(
             this.api,
             this.registry,
             "create_program",
             SailsMessageHeader.v1(InterfaceId.zero(), 0, 0),
-            [name, $symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs, initial_rate],
-            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["String", "String", "u8", "u32", "u32", "u64", "U256"]}),
+            [name, $symbol, decimals, instant_fee_bps, unbond_period_secs, vesting_period_secs, initial_rate],
+            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["String", "String", "u8", "u32", "u64", "u64", "U256"]}),
             this._typeResolver.getTypeDeclString("String"),
             codeId,
         );
@@ -64,7 +64,7 @@ export class VaraPool {
 }
 
 export type PoolError = { Paused: null } | { ZeroAddress: null } | { ZeroAmount: null } | { BelowMinimum: { min: bigint } } | { InsufficientShares: null } | { InsufficientBalance: null } | { InsufficientAllowance: null } | { /**
- * The pool's VARA reserve cannot cover this payout yet; nothing changed.
+ * The pool's distributable VARA cannot cover this payout; nothing changed.
  */
 InsufficientReserve: { available: bigint } } | { Unauthorized: null } | { Overflow: null } | { BadConfig: null } | { UnbondNotFound: null } | { UnbondNotReady: { claimable_at: number } } | { /**
  * The runtime refused the value transfer; the position was restored.
@@ -76,7 +76,7 @@ SessionExpired: null } | { /**
  * The session key acting for the owner may not perform this action.
  */
 SessionNotAllowed: null } | { /**
- * Session key, duration or action list is invalid.
+ * Session key, duration or action list is invalid, or no matching proposal exists.
  */
 BadSession: null };
 
@@ -87,7 +87,7 @@ export class Vft {
         private _programId: HexString,
         private _routeIdx: number = 0,
     ) {
-        this._typeResolver = new TypeResolver([{"name":"PoolError","kind":"enum","variants":[{"name":"Paused","fields":[],"entry_id":0},{"name":"ZeroAddress","fields":[],"entry_id":0},{"name":"ZeroAmount","fields":[],"entry_id":0},{"name":"BelowMinimum","fields":[{"name":"min","type":"U256"}],"entry_id":0},{"name":"InsufficientShares","fields":[],"entry_id":0},{"name":"InsufficientBalance","fields":[],"entry_id":0},{"name":"InsufficientAllowance","fields":[],"entry_id":0},{"name":"InsufficientReserve","fields":[{"name":"available","type":"U256"}],"entry_id":0,"docs":["The pool's VARA reserve cannot cover this payout yet; nothing changed."]},{"name":"Unauthorized","fields":[],"entry_id":0},{"name":"Overflow","fields":[],"entry_id":0},{"name":"BadConfig","fields":[],"entry_id":0},{"name":"UnbondNotFound","fields":[],"entry_id":0},{"name":"UnbondNotReady","fields":[{"name":"claimable_at","type":"u64"}],"entry_id":0},{"name":"TransferFailed","fields":[{"type":"String"}],"entry_id":0,"docs":["The runtime refused the value transfer; the position was restored."]},{"name":"SessionExpired","fields":[],"entry_id":0,"docs":["The session key acting for the owner has expired."]},{"name":"SessionNotAllowed","fields":[],"entry_id":0,"docs":["The session key acting for the owner may not perform this action."]},{"name":"BadSession","fields":[],"entry_id":0,"docs":["Session key, duration or action list is invalid."]}]}]);
+        this._typeResolver = new TypeResolver([{"name":"PoolError","kind":"enum","variants":[{"name":"Paused","fields":[],"entry_id":0},{"name":"ZeroAddress","fields":[],"entry_id":0},{"name":"ZeroAmount","fields":[],"entry_id":0},{"name":"BelowMinimum","fields":[{"name":"min","type":"U256"}],"entry_id":0},{"name":"InsufficientShares","fields":[],"entry_id":0},{"name":"InsufficientBalance","fields":[],"entry_id":0},{"name":"InsufficientAllowance","fields":[],"entry_id":0},{"name":"InsufficientReserve","fields":[{"name":"available","type":"U256"}],"entry_id":0,"docs":["The pool's distributable VARA cannot cover this payout; nothing changed."]},{"name":"Unauthorized","fields":[],"entry_id":0},{"name":"Overflow","fields":[],"entry_id":0},{"name":"BadConfig","fields":[],"entry_id":0},{"name":"UnbondNotFound","fields":[],"entry_id":0},{"name":"UnbondNotReady","fields":[{"name":"claimable_at","type":"u64"}],"entry_id":0},{"name":"TransferFailed","fields":[{"type":"String"}],"entry_id":0,"docs":["The runtime refused the value transfer; the position was restored."]},{"name":"SessionExpired","fields":[],"entry_id":0,"docs":["The session key acting for the owner has expired."]},{"name":"SessionNotAllowed","fields":[],"entry_id":0,"docs":["The session key acting for the owner may not perform this action."]},{"name":"BadSession","fields":[],"entry_id":0,"docs":["Session key, duration or action list is invalid, or no matching proposal exists."]}]}]);
     }
     private get registry() {
         return this._typeResolver.registry;
@@ -238,13 +238,15 @@ export class Vft {
 }
 
 
-export interface PoolInfo { admin: ActorId; name: string; $symbol: string; decimals: number; rate: bigint; apy_bps: number; instant_fee_bps: number; unbond_period_secs: number; total_shares: bigint; total_assets: bigint; reserve: bigint; fees_accrued: bigint; unbonding_total: bigint; min_stake: bigint; paused: boolean; last_accrual_at: number }
+export interface PoolInfo { admin: ActorId; name: string; $symbol: string; decimals: number; rate: bigint; apy_bps: number; instant_fee_bps: number; unbond_period_secs: number; vesting_period_secs: number; total_shares: bigint; total_assets: bigint; reserve: bigint; distributable: bigint; locked_rewards: bigint; vesting_ends_at: number; fees_accrued: bigint; unbonding_total: bigint; min_stake: bigint; paused: boolean }
 
 export interface Position { shares: bigint; assets: bigint }
 
 /**
  * A session key registered by an owner: messages signed by `key` act for the owner until
- * `expires_at`. Payouts always go to the owner, never to the key.
+ * `expires_at`. Payouts always go to the owner, never to the key. A session is proposed by
+ * the owner and only takes effect once the key itself accepts it, so nobody can bind an
+ * address they do not control.
  */
 export interface Session { key: ActorId; expires_at: number; actions: SessionAction[] }
 
@@ -264,23 +266,23 @@ export class Pool {
         private _programId: HexString,
         private _routeIdx: number = 0,
     ) {
-        this._typeResolver = new TypeResolver([{"name":"PoolError","kind":"enum","variants":[{"name":"Paused","fields":[],"entry_id":0},{"name":"ZeroAddress","fields":[],"entry_id":0},{"name":"ZeroAmount","fields":[],"entry_id":0},{"name":"BelowMinimum","fields":[{"name":"min","type":"U256"}],"entry_id":0},{"name":"InsufficientShares","fields":[],"entry_id":0},{"name":"InsufficientBalance","fields":[],"entry_id":0},{"name":"InsufficientAllowance","fields":[],"entry_id":0},{"name":"InsufficientReserve","fields":[{"name":"available","type":"U256"}],"entry_id":0,"docs":["The pool's VARA reserve cannot cover this payout yet; nothing changed."]},{"name":"Unauthorized","fields":[],"entry_id":0},{"name":"Overflow","fields":[],"entry_id":0},{"name":"BadConfig","fields":[],"entry_id":0},{"name":"UnbondNotFound","fields":[],"entry_id":0},{"name":"UnbondNotReady","fields":[{"name":"claimable_at","type":"u64"}],"entry_id":0},{"name":"TransferFailed","fields":[{"type":"String"}],"entry_id":0,"docs":["The runtime refused the value transfer; the position was restored."]},{"name":"SessionExpired","fields":[],"entry_id":0,"docs":["The session key acting for the owner has expired."]},{"name":"SessionNotAllowed","fields":[],"entry_id":0,"docs":["The session key acting for the owner may not perform this action."]},{"name":"BadSession","fields":[],"entry_id":0,"docs":["Session key, duration or action list is invalid."]}]}, {"name":"PoolInfo","kind":"struct","fields":[{"name":"admin","type":"ActorId"},{"name":"name","type":"String"},{"name":"symbol","type":"String"},{"name":"decimals","type":"u8"},{"name":"rate","type":"U256","docs":["VARA per kVARA scaled by 1e18, projected to now."]},{"name":"apy_bps","type":"u32"},{"name":"instant_fee_bps","type":"u32"},{"name":"unbond_period_secs","type":"u64"},{"name":"total_shares","type":"U256"},{"name":"total_assets","type":"U256","docs":["VARA owed to share holders at the projected rate."]},{"name":"reserve","type":"U256","docs":["VARA the pool physically holds for payouts (stakes plus funded rewards)."]},{"name":"fees_accrued","type":"U256"},{"name":"unbonding_total","type":"U256"},{"name":"min_stake","type":"U256"},{"name":"paused","type":"bool"},{"name":"last_accrual_at","type":"u64"}]}, {"name":"Position","kind":"struct","fields":[{"name":"shares","type":"U256"},{"name":"assets","type":"U256"}]}, {"name":"Session","kind":"struct","fields":[{"name":"key","type":"ActorId"},{"name":"expires_at","type":"u64"},{"name":"actions","type":{"kind":"slice","item":{"kind":"named","name":"SessionAction"}}}],"docs":["A session key registered by an owner: messages signed by `key` act for the owner until","`expires_at`. Payouts always go to the owner, never to the key."]}, {"name":"SessionAction","kind":"enum","variants":[{"name":"Stake","fields":[],"entry_id":0},{"name":"Unstake","fields":[],"entry_id":0},{"name":"Unbond","fields":[],"entry_id":0},{"name":"Claim","fields":[],"entry_id":0}],"docs":["Actions a session key may perform for its owner."]}, {"name":"Unbond","kind":"struct","fields":[{"name":"id","type":"u64"},{"name":"shares","type":"U256"},{"name":"assets","type":"U256"},{"name":"requested_at","type":"u64"},{"name":"claimable_at","type":"u64"}]}, {"name":"UnstakePreview","kind":"struct","fields":[{"name":"assets","type":"U256"},{"name":"fee","type":"U256"},{"name":"net","type":"U256"}]}]);
+        this._typeResolver = new TypeResolver([{"name":"PoolError","kind":"enum","variants":[{"name":"Paused","fields":[],"entry_id":0},{"name":"ZeroAddress","fields":[],"entry_id":0},{"name":"ZeroAmount","fields":[],"entry_id":0},{"name":"BelowMinimum","fields":[{"name":"min","type":"U256"}],"entry_id":0},{"name":"InsufficientShares","fields":[],"entry_id":0},{"name":"InsufficientBalance","fields":[],"entry_id":0},{"name":"InsufficientAllowance","fields":[],"entry_id":0},{"name":"InsufficientReserve","fields":[{"name":"available","type":"U256"}],"entry_id":0,"docs":["The pool's distributable VARA cannot cover this payout; nothing changed."]},{"name":"Unauthorized","fields":[],"entry_id":0},{"name":"Overflow","fields":[],"entry_id":0},{"name":"BadConfig","fields":[],"entry_id":0},{"name":"UnbondNotFound","fields":[],"entry_id":0},{"name":"UnbondNotReady","fields":[{"name":"claimable_at","type":"u64"}],"entry_id":0},{"name":"TransferFailed","fields":[{"type":"String"}],"entry_id":0,"docs":["The runtime refused the value transfer; the position was restored."]},{"name":"SessionExpired","fields":[],"entry_id":0,"docs":["The session key acting for the owner has expired."]},{"name":"SessionNotAllowed","fields":[],"entry_id":0,"docs":["The session key acting for the owner may not perform this action."]},{"name":"BadSession","fields":[],"entry_id":0,"docs":["Session key, duration or action list is invalid, or no matching proposal exists."]}]}, {"name":"PoolInfo","kind":"struct","fields":[{"name":"admin","type":"ActorId"},{"name":"name","type":"String"},{"name":"symbol","type":"String"},{"name":"decimals","type":"u8"},{"name":"rate","type":"U256","docs":["VARA per kVARA scaled by 1e18: distributable VARA over shares, now."]},{"name":"apy_bps","type":"u32","docs":["Annualised release rate of the rewards currently vesting, over distributable VARA.","Zero once the current tranche has fully vested."]},{"name":"instant_fee_bps","type":"u32"},{"name":"unbond_period_secs","type":"u64"},{"name":"vesting_period_secs","type":"u64"},{"name":"total_shares","type":"U256"},{"name":"total_assets","type":"U256","docs":["VARA owed to share holders: the distributable amount."]},{"name":"reserve","type":"U256","docs":["VARA the pool physically holds (stakes, rewards, fees, unbonds)."]},{"name":"distributable","type":"U256","docs":["Reserve minus fees, unbonds and rewards still vesting."]},{"name":"locked_rewards","type":"U256","docs":["Rewards not yet released."]},{"name":"vesting_ends_at","type":"u64","docs":["When the current tranche is fully vested (0 when nothing is vesting)."]},{"name":"fees_accrued","type":"U256"},{"name":"unbonding_total","type":"U256"},{"name":"min_stake","type":"U256"},{"name":"paused","type":"bool"}]}, {"name":"Position","kind":"struct","fields":[{"name":"shares","type":"U256"},{"name":"assets","type":"U256"}]}, {"name":"Session","kind":"struct","fields":[{"name":"key","type":"ActorId"},{"name":"expires_at","type":"u64"},{"name":"actions","type":{"kind":"slice","item":{"kind":"named","name":"SessionAction"}}}],"docs":["A session key registered by an owner: messages signed by `key` act for the owner until","`expires_at`. Payouts always go to the owner, never to the key. A session is proposed by","the owner and only takes effect once the key itself accepts it, so nobody can bind an","address they do not control."]}, {"name":"SessionAction","kind":"enum","variants":[{"name":"Stake","fields":[],"entry_id":0},{"name":"Unstake","fields":[],"entry_id":0},{"name":"Unbond","fields":[],"entry_id":0},{"name":"Claim","fields":[],"entry_id":0}],"docs":["Actions a session key may perform for its owner."]}, {"name":"Unbond","kind":"struct","fields":[{"name":"id","type":"u64"},{"name":"shares","type":"U256"},{"name":"assets","type":"U256"},{"name":"requested_at","type":"u64"},{"name":"claimable_at","type":"u64"}]}, {"name":"UnstakePreview","kind":"struct","fields":[{"name":"assets","type":"U256"},{"name":"fee","type":"U256"},{"name":"net","type":"U256"}]}]);
     }
     private get registry() {
         return this._typeResolver.registry;
     }
     public get interfaceId(): InterfaceId {
-        return InterfaceId.from("0xd332ff105e32f471");
+        return InterfaceId.from("0x736202f2ca7c8e83");
     }
-    public accrue(): TransactionBuilderWithHeader<bigint> {
-        return new TransactionBuilderWithHeader<bigint>(
+    public acceptSession(owner: ActorId): TransactionBuilderWithHeader<{ ok: Session } | { err: PoolError }> {
+        return new TransactionBuilderWithHeader<{ ok: Session } | { err: PoolError }>(
             this._api,
             this.registry,
             "send_message",
             SailsMessageHeader.v1(this.interfaceId, 0, this._routeIdx),
-            null,
-            null,
-            this._typeResolver.getTypeDeclString("U256"),
+            owner,
+            this._typeResolver.getTypeDeclString("ActorId"),
+            this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":[{"kind":"named","name":"Session"},{"kind":"named","name":"PoolError"}]}),
             this._programId,
         );
     }
@@ -362,12 +364,24 @@ export class Pool {
         );
     }
 
+    public pendingSession(owner: ActorId): QueryBuilderWithHeader<Session | null> {
+        return new QueryBuilderWithHeader<Session | null>(
+            this._api,
+            this.registry,
+            this._programId,
+            SailsMessageHeader.v1(this.interfaceId, 7, this._routeIdx),
+            owner,
+            this._typeResolver.getTypeDeclString("ActorId"),
+            this._typeResolver.getTypeDeclString({"kind":"named","name":"Option","generics":[{"kind":"named","name":"Session"}]}),
+        );
+    }
+
     public position(account: ActorId): QueryBuilderWithHeader<Position> {
         return new QueryBuilderWithHeader<Position>(
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 7, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 8, this._routeIdx),
             account,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Position"}),
@@ -379,7 +393,7 @@ export class Pool {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 8, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 9, this._routeIdx),
             assets,
             this._typeResolver.getTypeDeclString("U256"),
             this._typeResolver.getTypeDeclString("U256"),
@@ -391,7 +405,7 @@ export class Pool {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 9, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 10, this._routeIdx),
             shares,
             this._typeResolver.getTypeDeclString("U256"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"UnstakePreview"}),
@@ -403,7 +417,7 @@ export class Pool {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 10, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 11, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString("U256"),
@@ -415,7 +429,7 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 11, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 12, this._routeIdx),
             shares,
             this._typeResolver.getTypeDeclString("U256"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":[{"kind":"named","name":"Unbond"},{"kind":"named","name":"PoolError"}]}),
@@ -428,7 +442,7 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 12, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 13, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"PoolError"}]}),
@@ -441,7 +455,7 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 13, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 14, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString("bool"),
@@ -454,7 +468,7 @@ export class Pool {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 14, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 15, this._routeIdx),
             owner,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Option","generics":[{"kind":"named","name":"Session"}]}),
@@ -466,21 +480,21 @@ export class Pool {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 15, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 16, this._routeIdx),
             key,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Option","generics":["ActorId"]}),
         );
     }
 
-    public setConfig(apy_bps: number, instant_fee_bps: number, unbond_period_secs: number): TransactionBuilderWithHeader<{ ok: boolean } | { err: PoolError }> {
+    public setConfig(instant_fee_bps: number, unbond_period_secs: number, vesting_period_secs: number): TransactionBuilderWithHeader<{ ok: boolean } | { err: PoolError }> {
         return new TransactionBuilderWithHeader<{ ok: boolean } | { err: PoolError }>(
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 16, this._routeIdx),
-            [apy_bps, instant_fee_bps, unbond_period_secs],
-            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["u32", "u32", "u64"]}),
+            SailsMessageHeader.v1(this.interfaceId, 17, this._routeIdx),
+            [instant_fee_bps, unbond_period_secs, vesting_period_secs],
+            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["u32", "u64", "u64"]}),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"PoolError"}]}),
             this._programId,
         );
@@ -491,7 +505,7 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 17, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 18, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["U256",{"kind":"named","name":"PoolError"}]}),
@@ -504,7 +518,7 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 18, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 19, this._routeIdx),
             to,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"PoolError"}]}),
@@ -517,7 +531,7 @@ export class Pool {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 19, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 20, this._routeIdx),
             account,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"slice","item":{"kind":"named","name":"Unbond"}}),
@@ -529,27 +543,12 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 20, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 21, this._routeIdx),
             shares,
             this._typeResolver.getTypeDeclString("U256"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":[{"kind":"named","name":"UnstakePreview"},{"kind":"named","name":"PoolError"}]}),
             this._programId,
         );
-    }
-
-    public subscribeToAccruedEvent<T = { rate: bigint; total_assets: bigint }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
-        const interfaceIdu64 = this.interfaceId.asU64();
-        const eventFields = {"fields":[{"name":"rate","type":"U256"},{"name":"total_assets","type":"U256"}]}.fields as IStructField[];
-        const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);
-        return this._api.gearEvents.subscribeToGearEvent("UserMessageSent", ({ data: { message } }) => {
-            if (!message.source.eq(this._programId)) return;
-            if (!message.destination.eq(ZERO_ADDRESS)) return;
-
-            const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 0) {
-                callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
-            }
-        });
     }
 
     public subscribeToAdminTransferredEvent<T = { $from: ActorId; to: ActorId }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
@@ -561,7 +560,7 @@ export class Pool {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 1) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 0) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -576,22 +575,22 @@ export class Pool {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 2) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 1) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
     }
 
-    public subscribeToConfigChangedEvent<T = { apy_bps: number; instant_fee_bps: number; unbond_period_secs: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
+    public subscribeToConfigChangedEvent<T = { instant_fee_bps: number; unbond_period_secs: number; vesting_period_secs: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
         const interfaceIdu64 = this.interfaceId.asU64();
-        const eventFields = {"fields":[{"name":"apy_bps","type":"u32"},{"name":"instant_fee_bps","type":"u32"},{"name":"unbond_period_secs","type":"u64"}]}.fields as IStructField[];
+        const eventFields = {"fields":[{"name":"instant_fee_bps","type":"u32"},{"name":"unbond_period_secs","type":"u64"},{"name":"vesting_period_secs","type":"u64"}]}.fields as IStructField[];
         const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);
         return this._api.gearEvents.subscribeToGearEvent("UserMessageSent", ({ data: { message } }) => {
             if (!message.source.eq(this._programId)) return;
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 3) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 2) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -606,7 +605,7 @@ export class Pool {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 4) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 3) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -621,7 +620,7 @@ export class Pool {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 5) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 4) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -636,15 +635,30 @@ export class Pool {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 5) {
+                callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
+            }
+        });
+    }
+
+    public subscribeToRewardsFundedEvent<T = { $from: ActorId; assets: bigint; reserve: bigint; vesting_ends_at: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
+        const interfaceIdu64 = this.interfaceId.asU64();
+        const eventFields = {"fields":[{"name":"from","type":"ActorId"},{"name":"assets","type":"U256"},{"name":"reserve","type":"U256"},{"name":"vesting_ends_at","type":"u64"}]}.fields as IStructField[];
+        const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);
+        return this._api.gearEvents.subscribeToGearEvent("UserMessageSent", ({ data: { message } }) => {
+            if (!message.source.eq(this._programId)) return;
+            if (!message.destination.eq(ZERO_ADDRESS)) return;
+
+            const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
             if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 6) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
     }
 
-    public subscribeToRewardsFundedEvent<T = { $from: ActorId; assets: bigint; reserve: bigint }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
+    public subscribeToSessionAcceptedEvent<T = { owner: ActorId; key: ActorId; expires_at: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
         const interfaceIdu64 = this.interfaceId.asU64();
-        const eventFields = {"fields":[{"name":"from","type":"ActorId"},{"name":"assets","type":"U256"},{"name":"reserve","type":"U256"}]}.fields as IStructField[];
+        const eventFields = {"fields":[{"name":"owner","type":"ActorId"},{"name":"key","type":"ActorId"},{"name":"expires_at","type":"u64"}]}.fields as IStructField[];
         const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);
         return this._api.gearEvents.subscribeToGearEvent("UserMessageSent", ({ data: { message } }) => {
             if (!message.source.eq(this._programId)) return;
@@ -657,7 +671,7 @@ export class Pool {
         });
     }
 
-    public subscribeToSessionCreatedEvent<T = { owner: ActorId; key: ActorId; expires_at: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
+    public subscribeToSessionProposedEvent<T = { owner: ActorId; key: ActorId; expires_at: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
         const interfaceIdu64 = this.interfaceId.asU64();
         const eventFields = {"fields":[{"name":"owner","type":"ActorId"},{"name":"key","type":"ActorId"},{"name":"expires_at","type":"u64"}]}.fields as IStructField[];
         const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);

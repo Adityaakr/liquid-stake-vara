@@ -4,7 +4,7 @@ import { ChartPie, Coins, Star, Wallet } from 'lucide-react';
 import { AmountField, Badge, Bento, Button, Tabs, type TokenSymbol } from '@/ui';
 import { useStore } from '@/chain/store';
 import type { DepositAsset } from '@/chain/types';
-import { accrueRate, assetsToShares, sharesToAssets, validateAmount } from '@/domain/math';
+import { assetsToShares, projectRate, sharesToAssets, validateAmount } from '@/domain/math';
 import { bpsToPercent, formatCompactUsd, formatCountdown, formatRate, formatUnits, formatUsd, parseUnits, toNumber } from '@/domain/format';
 import { BPS, INSTANT_UNSTAKE_FEE_BPS, STABLE_DECIMALS, VARA_DECIMALS } from '@/domain/protocol';
 import { Eyebrow, IRow, useNow } from './bits';
@@ -51,8 +51,8 @@ export function StakePage() {
   const isVara = asset === 'VARA';
   const fmt = (v: bigint, dp = 2) => formatUnits(v, decimals, dp);
   const apyBps = stats ? (isVara ? stats.stakeApyBps : stats.vaults[asset].apyBps) : null;
-  // Rates keep accruing between stat refreshes; project them to the current second.
-  const rate = stats ? accrueRate(isVara ? stats.rate : stats.vaults[asset].rate, apyBps ?? 0n, now - stats.at) : null;
+  // Rewards vest by the second between stat refreshes; project the rate to now, but not past the tranche.
+  const rate = stats ? projectRate(isVara ? stats.rate : stats.vaults[asset].rate, apyBps ?? 0n, stats.at, now, isVara ? stats.stakeVestingEndsAt : stats.vaults[asset].vestingEndsAt) : null;
   const parsed = useMemo(() => parseUnits(amt, decimals), [amt, decimals]);
   const bal = tab === 'Stake' ? balances?.[deposit as 'VARA' | 'USDT' | 'USDC'] ?? 0n : balances?.[receipt as 'kVARA' | 'kUSDT' | 'kUSDC'] ?? 0n;
   const validation = validateAmount(amt, parsed, balances ? bal : null);

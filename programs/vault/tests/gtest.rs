@@ -24,9 +24,9 @@ const CHARLIE: u64 = DEFAULT_USER_CHARLIE;
 const ONE: u64 = 1_000_000; // 6 decimals
 const FAUCET: u64 = 1_000 * ONE;
 const SCALE: u128 = 1_000_000_000_000_000_000;
-const APY_BPS: u32 = 100_000; // 1000% so accrual is visible within a few thousand blocks
 const FEE_BPS: u32 = 30;
 const UNBOND_SECS: u64 = 60; // 20 blocks
+const VESTING_SECS: u64 = 3_600; // the minimum: a tranche vests over 1,200 blocks
 const BLOCK_MS: u64 = 3000;
 
 type Token = Actor<DemoTokenProgram, GtestEnv>;
@@ -67,7 +67,7 @@ impl World {
     }
 }
 
-/// Deploy token + vault as Alice, grant the vault minter, give Bob faucet balance and approval.
+/// Deploy token + vault as Alice at rate 1.0, give Bob faucet balance and approval.
 async fn setup() -> World {
     let env = GtestEnv::system_default();
     for user in [BOB, CHARLIE] {
@@ -82,13 +82,11 @@ async fn setup() -> World {
     let vault_code = env.system().submit_code(::vault::WASM_BINARY);
     let vault = env
         .deploy::<VaultClientProgram>(vault_code, b"kusdc".to_vec())
-        // APY starts at zero so share math in the tests is exact; accrual tests switch it on.
-        .new(token.id(), "Vale kUSDC".into(), "kUSDC".into(), 6, 0, FEE_BPS, UNBOND_SECS, U256::zero())
+        .new(token.id(), "Vale kUSDC".into(), "kUSDC".into(), 6, FEE_BPS, UNBOND_SECS, VESTING_SECS, U256::zero())
         .await
         .unwrap();
     // Programs need balance to pay for the messages they send.
     env.system().transfer(ALICE, vault.id(), 10_000 * 1_000_000_000_000u128, true);
-    token.admin().grant_minter(vault.id()).await.unwrap().unwrap();
 
     let w = World { env, token, vault };
     w.token_as(BOB).faucet().claim().await.unwrap().unwrap();
@@ -105,14 +103,16 @@ async fn constructor_state_and_metadata() {
     assert_eq!(info.symbol, "kUSDC");
     assert_eq!(info.decimals, 6);
     assert_eq!(info.rate, U256::from(SCALE));
-    assert_eq!(info.apy_bps, 0);
+    assert_eq!(info.apy_bps, 0, "nothing is vesting");
     assert_eq!(info.instant_fee_bps, FEE_BPS);
     assert_eq!(info.unbond_period_secs, UNBOND_SECS);
+    assert_eq!(info.vesting_period_secs, VESTING_SECS);
     assert_eq!(info.total_shares, U256::zero());
+    assert_eq!(info.locked_rewards, U256::zero());
     assert!(!info.paused);
     assert_eq!(w.vault.vft().symbol().await.unwrap(), "kUSDC");
     assert_eq!(w.vault.vft().total_supply().await.unwrap(), U256::zero());
-    assert!(w.token.admin().is_minter(w.vault.id()).await.unwrap());
+    assert!(!w.token.admin().is_minter(w.vault.id()).await.unwrap(), "the vault never mints: yield is funded");
 }
 
 #[tokio::test]
@@ -158,36 +158,74 @@ async fn deposit_without_allowance_fails_without_side_effects() {
     assert_eq!(zero, Err(vault::VaultError::ZeroAmount));
 }
 
+/// Alice mints demo tokens to herself, approves the vault and funds them as rewards.
+async fn fund_rewards(w: &World, amount: U256) -> U256 {
+    w.token.admin().mint(actor(ALICE), amount).await.unwrap().unwrap();
+    w.token.vft().approve(w.vault.id(), amount).await.unwrap().unwrap();
+    w.vault.vault().fund_rewards(amount).await.unwrap().unwrap()
+}
+
 #[tokio::test]
-async fn rate_accrues_and_redeem_pays_yield_by_minting_shortfall() {
+async fn rewards_vest_linearly_and_are_paid_from_holdings() {
     let w = setup().await;
     w.vault_as(BOB).vault().deposit(u(500 * ONE)).await.unwrap().unwrap();
-    w.vault.vault().set_config(APY_BPS, FEE_BPS, UNBOND_SECS).await.unwrap().unwrap();
-    let supply_before = w.token.vft().total_supply().await.unwrap();
+    let mut events = w.vault.vault().listen().await.unwrap();
+    let holdings = fund_rewards(&w, u(50 * ONE)).await;
+    assert_eq!(holdings, u(550 * ONE));
+    assert_eq!(w.token_balance(w.vault.id()).await, u(550 * ONE), "the rewards are real tokens in the vault");
+    let (_, ev) = events.next().await.unwrap();
+    assert!(matches!(ev, VaultEvents::RewardsFunded { from, assets, .. } if from == actor(ALICE) && assets == u(50 * ONE)), "{ev:?}");
 
-    w.skip_secs(30_000); // ~0.95% at 1000% APY
-    let rate = w.vault.vault().rate().await.unwrap();
-    assert!(rate > U256::from(SCALE), "rate moved: {rate}");
+    // Funding does not jump the rate: the tranche is locked and releases over the period
+    // (a couple of blocks later, a few thousandths of it are out).
+    let info = w.vault.vault().info().await.unwrap();
+    assert!(info.rate <= U256::from(SCALE + SCALE / 1_000), "rate barely moved at funding: {}", info.rate);
+    assert!(info.locked_rewards > u(49_900 * ONE / 1_000), "locked: {}", info.locked_rewards);
+    assert!(info.apy_bps > 0, "the drip is visible as an APY: {}", info.apy_bps);
+
+    w.skip_secs(VESTING_SECS / 2);
     let pos = w.vault.vault().position(actor(BOB)).await.unwrap();
     assert_eq!(pos.shares, u(500 * ONE));
-    assert!(pos.assets > u(500 * ONE) && pos.assets < u(510 * ONE), "{pos:?}");
+    assert!(pos.assets > u(520 * ONE) && pos.assets < u(530 * ONE), "half way: {pos:?}");
+
+    w.skip_secs(VESTING_SECS);
+    let info = w.vault.vault().info().await.unwrap();
+    assert_eq!(info.rate, U256::from(SCALE + SCALE / 10), "fully vested: 1.10");
+    assert_eq!((info.apy_bps, info.locked_rewards, info.vesting_ends_at), (0, U256::zero(), 0));
 
     let preview = w.vault.vault().preview_redeem(u(500 * ONE)).await.unwrap();
     let bob_before = w.token_balance(actor(BOB)).await;
     let out = w.vault_as(BOB).vault().redeem(u(500 * ONE)).await.unwrap().unwrap();
-    assert!(out.assets >= preview.assets, "{out:?} vs {preview:?}");
+    assert_eq!(out, preview);
+    assert_eq!(out.assets, u(550 * ONE), "principal plus the whole tranche");
     assert_eq!(out.fee, out.assets * U256::from(FEE_BPS) / U256::from(10_000u64));
-    assert_eq!(out.net, out.assets - out.fee);
-    assert!(out.net > u(500 * ONE), "yield paid");
-
     assert_eq!(w.token_balance(actor(BOB)).await, bob_before + out.net);
     assert_eq!(w.shares(actor(BOB)).await, U256::zero());
     let info = w.vault.vault().info().await.unwrap();
     assert_eq!(info.total_shares, U256::zero());
     assert_eq!(info.fees_accrued, out.fee);
-    assert_eq!(info.holdings, U256::zero(), "all principal paid out, yield was minted lazily");
-    let supply_after = w.token.vft().total_supply().await.unwrap();
-    assert_eq!(supply_after - supply_before, out.net - u(500 * ONE), "exactly the realised yield was minted");
+    assert_eq!(info.holdings, out.fee, "only the fee is left");
+    assert_eq!(info.rate, U256::from(SCALE + SCALE / 10), "an empty vault keeps its last rate");
+}
+
+#[tokio::test]
+async fn instant_round_trip_earns_nothing() {
+    let w = setup().await;
+    w.vault_as(BOB).vault().deposit(u(900 * ONE)).await.unwrap().unwrap();
+    fund_rewards(&w, u(90 * ONE)).await;
+    w.skip_secs(VESTING_SECS / 2);
+    let bob_owed = w.vault.vault().position(actor(BOB)).await.unwrap().assets;
+
+    // Charlie visits: in, then straight out at the very next block.
+    w.token_as(CHARLIE).faucet().claim().await.unwrap().unwrap();
+    w.token_as(CHARLIE).vft().approve(w.vault.id(), U256::MAX).await.unwrap().unwrap();
+    let shares = w.vault_as(CHARLIE).vault().deposit(u(100 * ONE)).await.unwrap().unwrap();
+    assert!(shares < u(100 * ONE), "priced at the grown rate: {shares}");
+    let out = w.vault_as(CHARLIE).vault().redeem(shares).await.unwrap().unwrap();
+    assert!(out.assets < u(100 * ONE) + u(ONE / 100), "one block of the pro-rata drip at most: {}", out.assets);
+    assert!(out.net < u(100 * ONE), "the fee makes it a loss: {}", out.net);
+    assert!(w.token_balance(actor(CHARLIE)).await < u(FAUCET), "charlie is down the fee");
+    assert!(w.vault.vault().position(actor(BOB)).await.unwrap().assets >= bob_owed, "bob lost nothing to the visit");
 }
 
 #[tokio::test]
@@ -236,13 +274,15 @@ async fn receipt_token_is_transferable_and_redeemable_by_holder() {
 #[tokio::test]
 async fn admin_controls() {
     let w = setup().await;
-    let denied = w.vault_as(BOB).vault().set_config(100, 10, 5).await.unwrap();
+    let denied = w.vault_as(BOB).vault().set_config(10, 5, VESTING_SECS).await.unwrap();
     assert_eq!(denied, Err(vault::VaultError::Unauthorized));
-    let bad = w.vault.vault().set_config(200_000, 10, 5).await.unwrap();
+    let bad = w.vault.vault().set_config(2_000, 5, VESTING_SECS).await.unwrap();
     assert_eq!(bad, Err(vault::VaultError::BadConfig));
-    w.vault.vault().set_config(500, 50, 10).await.unwrap().unwrap();
+    let short = w.vault.vault().set_config(10, 5, 60).await.unwrap();
+    assert_eq!(short, Err(vault::VaultError::BadConfig));
+    w.vault.vault().set_config(50, 10, 7_200).await.unwrap().unwrap();
     let info = w.vault.vault().info().await.unwrap();
-    assert_eq!((info.apy_bps, info.instant_fee_bps, info.unbond_period_secs), (500, 50, 10));
+    assert_eq!((info.instant_fee_bps, info.unbond_period_secs, info.vesting_period_secs), (50, 10, 7_200));
 
     w.vault.vault().pause().await.unwrap().unwrap();
     let paused = w.vault_as(BOB).vault().deposit(u(10 * ONE)).await.unwrap();
@@ -250,7 +290,7 @@ async fn admin_controls() {
     w.vault.vault().resume().await.unwrap().unwrap();
     w.vault_as(BOB).vault().deposit(u(100 * ONE)).await.unwrap().unwrap();
 
-    // Fees: redeem everything at 0.5% then collect to Alice (vault mints the shortfall for fees too).
+    // Fees: redeem everything at 0.5% then collect to Alice.
     let all = w.shares(actor(BOB)).await;
     let out = w.vault_as(BOB).vault().redeem(all).await.unwrap().unwrap();
     assert!(out.fee > U256::zero());
@@ -262,29 +302,11 @@ async fn admin_controls() {
     assert_eq!(w.token_balance(actor(ALICE)).await, alice_before + collected);
     assert_eq!(w.vault.vault().info().await.unwrap().fees_accrued, U256::zero());
 
-    // Reserve top-up mints into the vault.
-    w.vault.vault().top_up_reserve(u(1_000 * ONE)).await.unwrap().unwrap();
-    assert_eq!(w.vault.vault().info().await.unwrap().holdings, u(1_000 * ONE));
-    assert_eq!(w.token_balance(w.vault.id()).await, u(1_000 * ONE));
+    assert_eq!(w.vault.vault().info().await.unwrap().holdings, U256::zero());
+    assert_eq!(w.token_balance(w.vault.id()).await, U256::zero(), "everything paid out is really gone");
 
     w.vault.vault().transfer_admin(actor(BOB)).await.unwrap().unwrap();
     assert_eq!(w.vault.vault().info().await.unwrap().admin, actor(BOB));
-}
-
-#[tokio::test]
-async fn accrue_checkpoints_and_emits() {
-    let w = setup().await;
-    w.vault_as(BOB).vault().deposit(u(100 * ONE)).await.unwrap().unwrap();
-    w.vault.vault().set_config(APY_BPS, FEE_BPS, UNBOND_SECS).await.unwrap().unwrap();
-    let mut events = w.vault.vault().listen().await.unwrap();
-    w.skip_secs(3_000);
-    let rate = w.vault_as(CHARLIE).vault().accrue().await.unwrap();
-    assert!(rate > U256::from(SCALE));
-    let (_, ev) = events.next().await.unwrap();
-    assert!(matches!(ev, VaultEvents::Accrued { rate: r, .. } if r == rate), "{ev:?}");
-    let info = w.vault.vault().info().await.unwrap();
-    assert!(info.rate >= rate, "checkpoint persisted and keeps projecting: {} >= {rate}", info.rate);
-    assert!(info.last_accrual_at > info.last_accrual_at - 3_000 * 1_000, "clock advanced");
 }
 
 #[allow(non_snake_case)]
@@ -294,13 +316,21 @@ fn okOf<T: core::fmt::Debug, E: core::fmt::Debug>(r: core::result::Result<T, E>)
 fn two() -> U256 { U256::from(2u64) }
 
 #[tokio::test]
-async fn session_key_acts_for_its_owner() {
+async fn session_key_acts_for_its_owner_once_it_accepts() {
     let w = setup().await;
     let key: u64 = 424_242;
     w.env.system().mint_to(key, DEFAULT_USERS_INITIAL_BALANCE);
     // A fresh key, allowed to deposit and redeem only.
     let session = okOf(w.vault_as(BOB).vault().create_session(actor(key), 3_600, vec![vault::SessionAction::Deposit, vault::SessionAction::Redeem]).await.unwrap());
     assert_eq!(session.key, actor(key));
+    // Proposed only: the key is still a plain account and cannot act for Bob yet.
+    assert_eq!(w.vault.vault().session_owner(actor(key)).await.unwrap(), None);
+    assert_eq!(w.vault.vault().pending_session(actor(BOB)).await.unwrap(), Some(session.clone()));
+    let plain = w.vault_as(key).vault().deposit(u(100 * ONE)).await.unwrap();
+    assert!(matches!(plain, Err(vault::VaultError::TokenRejected(_))), "the key has no tokens of its own: {plain:?}");
+
+    let accepted = okOf(w.vault_as(key).vault().accept_session(actor(BOB)).await.unwrap());
+    assert_eq!(accepted, session);
     assert_eq!(w.vault.vault().session_owner(actor(key)).await.unwrap(), Some(actor(BOB)));
 
     // The key deposits: tokens leave Bob, shares land on Bob, the key holds nothing.
@@ -327,11 +357,26 @@ async fn session_key_acts_for_its_owner() {
 }
 
 #[tokio::test]
+async fn proposing_a_stranger_as_key_cannot_capture_their_deposit() {
+    // Regression: before sessions needed acceptance, anyone could name another account as
+    // "their key" and redirect that account's own deposits and redeems.
+    let w = setup().await;
+    let all = vec![vault::SessionAction::Deposit, vault::SessionAction::Redeem, vault::SessionAction::Unbond, vault::SessionAction::Claim];
+    okOf(w.vault_as(CHARLIE).vault().create_session(actor(BOB), 3_600, all).await.unwrap());
+    let shares = okOf(w.vault_as(BOB).vault().deposit(u(100 * ONE)).await.unwrap());
+    assert_eq!(w.shares(actor(BOB)).await, shares, "bob's deposit is bob's");
+    assert_eq!(w.shares(actor(CHARLIE)).await, U256::zero());
+    let out = okOf(w.vault_as(BOB).vault().redeem(shares).await.unwrap());
+    assert_eq!(out.assets, u(100 * ONE));
+}
+
+#[tokio::test]
 async fn expired_session_is_rejected() {
     let w = setup().await;
     let key: u64 = 515_151;
     w.env.system().mint_to(key, DEFAULT_USERS_INITIAL_BALANCE);
     okOf(w.vault_as(BOB).vault().create_session(actor(key), 30, vec![vault::SessionAction::Deposit]).await.unwrap());
+    okOf(w.vault_as(key).vault().accept_session(actor(BOB)).await.unwrap());
     w.skip_secs(31);
     let late = w.vault_as(key).vault().deposit(u(10 * ONE)).await.unwrap();
     assert_eq!(late, Err(vault::VaultError::SessionExpired));

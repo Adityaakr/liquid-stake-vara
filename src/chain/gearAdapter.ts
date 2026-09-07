@@ -243,8 +243,10 @@ export class GearAdapter implements StakingAdapter {
 
   /**
    * One wallet signature for everything the session needs: unlimited approvals for both vaults,
-   * a session key registered in both vaults and the kVARA pool, and a VARA transfer so the key
-   * can pay fees.
+   * a session proposed to the key in both vaults and the kVARA pool, and a VARA transfer so the
+   * key can pay fees. The key then accepts each proposal itself (signed locally, no prompt): a
+   * session only ever binds a key that agreed to it, so nobody can register somebody else's
+   * account as their key.
    */
   async enableSession(address: string, opts: { hours: number; gasVara: number }): Promise<TxResult & { session: SessionInfo }> {
     const api = await this.connect();
@@ -277,11 +279,30 @@ export class GearAdapter implements StakingAdapter {
       };
       ('options' in signer ? tx.signAndSend(signer.account as string, signer.options ?? {}, cb) : tx.signAndSend(signer.account as SessionPair, cb)).catch((e: unknown) => reject(userMessage(e)));
     });
+    await this.acceptSessions(address, pair);
     const all = loadSessions();
     all[address] = { seed, key: pair.address, expiresAt: Date.now() + durationSecs * 1000 };
     saveSessions(all);
     const session = (await this.getSession(address)) ?? { key: pair.address, expiresAt: all[address].expiresAt, actions: [...SESSION_ACTIONS], gasBalance: 0n };
     return { hash, link: txLink(this.network, hash), session };
+  }
+
+  /** The key accepts the sessions `address` proposed for it, one message per program, sent together. */
+  private async acceptSessions(address: string, pair: SessionPair): Promise<void> {
+    const api = await this.connect();
+    const owner = await this.hex(address);
+    const builders: TxBuilder<unknown>[] = [];
+    for (const asset of VAULT_ASSETS) {
+      if (!this.programs[asset]) continue;
+      const { vault } = await this.programsFor(asset);
+      builders.push(vault.vault.acceptSession(owner).withGas(GAS.vaultSync));
+    }
+    if (this.pool) builders.push((await this.poolClient()).pool.acceptSession(owner).withGas(GAS.pool));
+    const nonce = (await api.rpc.system.accountNextIndex(pair.address)).toNumber();
+    const sent = await Promise.all(builders.map((b, i) => b.withAccount(pair, { nonce: nonce + i }).signAndSend()));
+    const results = await Promise.all(sent.map((t) => t.response()));
+    const failed = results.map((r) => (r && typeof r === 'object' && 'err' in r ? describeProgramError((r as { err: unknown }).err) : null)).filter(Boolean);
+    if (failed.length) throw new ChainError(`Session key could not accept the session: ${failed.join('; ')}`, 'PROGRAM');
   }
 
   /** Revoke on chain with one wallet signature, then sweep the key's leftover VARA back. */
@@ -331,24 +352,27 @@ export class GearAdapter implements StakingAdapter {
       totalShares: big(info.total_shares),
       totalAssets,
       holdings: big(info.holdings),
+      vestingEndsAt: num(info.vesting_ends_at),
       tvlUsd: (Number(totalAssets) / Number(ONE_STABLE)) * STABLE_PRICE_USD,
       paused: !!info.paused,
     };
   }
 
   /** The kVARA pool as the program reports it; the published figures stand in until it is deployed. */
-  private async poolStats(now: number): Promise<{ rate: bigint; apyBps: bigint; staked: bigint; tvlUsd: number; feeBps: bigint; unbondSecs: number; reserve: bigint }> {
-    if (!this.pool) return { rate: varaRateAt(now), apyBps: VARA_APY_BPS, staked: STAKED_VARA, tvlUsd: VARA_TVL_USD, feeBps: 30n, unbondSecs: 7 * 86_400, reserve: 0n };
+  private async poolStats(now: number): Promise<{ rate: bigint; apyBps: bigint; staked: bigint; tvlUsd: number; feeBps: bigint; unbondSecs: number; reserve: bigint; vestingEndsAt: number }> {
+    if (!this.pool) return { rate: varaRateAt(now), apyBps: VARA_APY_BPS, staked: STAKED_VARA, tvlUsd: VARA_TVL_USD, feeBps: 30n, unbondSecs: 7 * 86_400, reserve: 0n, vestingEndsAt: Infinity };
     const info = await (await this.poolClient()).pool.info().call();
     const staked = big(info.total_assets);
     return {
       rate: big(info.rate) / RATE_1E18_TO_1E9,
+      // The pool reports the release rate of the rewards tranche currently vesting, annualised.
       apyBps: BigInt(num(info.apy_bps)),
       staked,
       tvlUsd: (Number(staked) / Number(ONE_VARA)) * VARA_PRICE_USD,
       feeBps: BigInt(num(info.instant_fee_bps)),
       unbondSecs: num(info.unbond_period_secs),
       reserve: big(info.reserve),
+      vestingEndsAt: num(info.vesting_ends_at),
     };
   }
 
@@ -356,16 +380,17 @@ export class GearAdapter implements StakingAdapter {
     const api = await this.connect();
     const now = Date.now();
     const [header, pool, ...stats] = await Promise.all([api.rpc.chain.getHeader(), this.poolStats(now), ...VAULT_ASSETS.map((a) => this.vaultStats(a))]);
-    const empty: VaultStats = { rate: RATE_SCALE, apyBps: 0n, instantFeeBps: 0n, unbondSecs: 0, minDeposit: 0n, totalShares: 0n, totalAssets: 0n, holdings: 0n, tvlUsd: 0, paused: true };
+    const empty: VaultStats = { rate: RATE_SCALE, apyBps: 0n, instantFeeBps: 0n, unbondSecs: 0, minDeposit: 0n, totalShares: 0n, totalAssets: 0n, holdings: 0n, vestingEndsAt: 0, tvlUsd: 0, paused: true };
     const vaults = Object.fromEntries(VAULT_ASSETS.map((a, i) => [a, stats[i] ?? empty])) as Record<VaultAsset, VaultStats>;
     const blockNumber = header.number.toNumber();
-    // The rate compounds every block (3s): the timeline shows the last three blocks' rates.
+    // Rewards vest every block (3s): the timeline shows the last three blocks' rates.
     const rateBlocksAgo = (n: number) => pool.rate - (pool.rate * pool.apyBps * BigInt(n * BLOCK_SECS)) / (10_000n * 31_536_000n);
     return {
       rate: pool.rate,
       stakeApyBps: pool.apyBps,
       stakeFeeBps: pool.feeBps,
       stakeUnbondSecs: pool.unbondSecs,
+      stakeVestingEndsAt: pool.vestingEndsAt,
       vaults,
       tvlUsd: pool.tvlUsd + VAULT_ASSETS.reduce((s, a) => s + vaults[a].tvlUsd, 0),
       totalStakedVara: pool.staked,

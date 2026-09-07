@@ -24,14 +24,14 @@ export class Vault {
         return this._programId;
     }
 
-    public newCtorFromCode(code: Uint8Array | Buffer | HexString, underlying: ActorId, name: string, $symbol: string, decimals: number, apy_bps: number, instant_fee_bps: number, unbond_period_secs: number, initial_rate: bigint): TransactionBuilderWithHeader<null> {
+    public newCtorFromCode(code: Uint8Array | Buffer | HexString, underlying: ActorId, name: string, $symbol: string, decimals: number, instant_fee_bps: number, unbond_period_secs: number, vesting_period_secs: number, initial_rate: bigint): TransactionBuilderWithHeader<null> {
         const builder = new TransactionBuilderWithHeader<null>(
             this.api,
             this.registry,
             "upload_program",
             SailsMessageHeader.v1(InterfaceId.zero(), 0, 0),
-            [underlying, name, $symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs, initial_rate],
-            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["ActorId", "String", "String", "u8", "u32", "u32", "u64", "U256"]}),
+            [underlying, name, $symbol, decimals, instant_fee_bps, unbond_period_secs, vesting_period_secs, initial_rate],
+            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["ActorId", "String", "String", "u8", "u32", "u64", "u64", "U256"]}),
             this._typeResolver.getTypeDeclString("String"),
             code,
         );
@@ -39,14 +39,14 @@ export class Vault {
         return builder;
     }
 
-    public newCtorFromCodeId(codeId: `0x${string}`, underlying: ActorId, name: string, $symbol: string, decimals: number, apy_bps: number, instant_fee_bps: number, unbond_period_secs: number, initial_rate: bigint): TransactionBuilderWithHeader<null> {
+    public newCtorFromCodeId(codeId: `0x${string}`, underlying: ActorId, name: string, $symbol: string, decimals: number, instant_fee_bps: number, unbond_period_secs: number, vesting_period_secs: number, initial_rate: bigint): TransactionBuilderWithHeader<null> {
         const builder = new TransactionBuilderWithHeader<null>(
             this.api,
             this.registry,
             "create_program",
             SailsMessageHeader.v1(InterfaceId.zero(), 0, 0),
-            [underlying, name, $symbol, decimals, apy_bps, instant_fee_bps, unbond_period_secs, initial_rate],
-            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["ActorId", "String", "String", "u8", "u32", "u32", "u64", "U256"]}),
+            [underlying, name, $symbol, decimals, instant_fee_bps, unbond_period_secs, vesting_period_secs, initial_rate],
+            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["ActorId", "String", "String", "u8", "u32", "u64", "u64", "U256"]}),
             this._typeResolver.getTypeDeclString("String"),
             codeId,
         );
@@ -63,7 +63,10 @@ export class Vault {
     }
 }
 
-export type VaultError = { Paused: null } | { ZeroAddress: null } | { ZeroAmount: null } | { BelowMinimum: { min: bigint } } | { InsufficientShares: null } | { InsufficientBalance: null } | { InsufficientAllowance: null } | { Unauthorized: null } | { Overflow: null } | { BadConfig: null } | { UnbondNotFound: null } | { UnbondNotReady: { claimable_at: number } } | { /**
+export type VaultError = { Paused: null } | { ZeroAddress: null } | { ZeroAmount: null } | { BelowMinimum: { min: bigint } } | { InsufficientShares: null } | { InsufficientBalance: null } | { InsufficientAllowance: null } | { /**
+ * The vault's distributable assets cannot cover this payout; nothing changed.
+ */
+InsufficientReserve: { available: bigint } } | { Unauthorized: null } | { Overflow: null } | { BadConfig: null } | { UnbondNotFound: null } | { UnbondNotReady: { claimable_at: number } } | { /**
  * The underlying token rejected the transfer (allowance, balance, paused).
  */
 TokenRejected: string } | { /**
@@ -79,7 +82,7 @@ SessionExpired: null } | { /**
  * The session key acting for the owner may not perform this action.
  */
 SessionNotAllowed: null } | { /**
- * Session key, duration or action list is invalid.
+ * Session key, duration or action list is invalid, or no matching proposal exists.
  */
 BadSession: null };
 
@@ -90,13 +93,13 @@ export class Vft {
         private _programId: HexString,
         private _routeIdx: number = 0,
     ) {
-        this._typeResolver = new TypeResolver([{"name":"VaultError","kind":"enum","variants":[{"name":"Paused","fields":[],"entry_id":0},{"name":"ZeroAddress","fields":[],"entry_id":0},{"name":"ZeroAmount","fields":[],"entry_id":0},{"name":"BelowMinimum","fields":[{"name":"min","type":"U256"}],"entry_id":0},{"name":"InsufficientShares","fields":[],"entry_id":0},{"name":"InsufficientBalance","fields":[],"entry_id":0},{"name":"InsufficientAllowance","fields":[],"entry_id":0},{"name":"Unauthorized","fields":[],"entry_id":0},{"name":"Overflow","fields":[],"entry_id":0},{"name":"BadConfig","fields":[],"entry_id":0},{"name":"UnbondNotFound","fields":[],"entry_id":0},{"name":"UnbondNotReady","fields":[{"name":"claimable_at","type":"u64"}],"entry_id":0},{"name":"TokenRejected","fields":[{"type":"String"}],"entry_id":0,"docs":["The underlying token rejected the transfer (allowance, balance, paused)."]},{"name":"TokenCall","fields":[{"type":"String"}],"entry_id":0,"docs":["The cross-program call failed to complete (timeout, transport, panic)."]},{"name":"NotEnoughGas","fields":[{"name":"required","type":"u64"}],"entry_id":0,"docs":["The message carried less gas than the async flow needs; nothing was moved."]},{"name":"SessionExpired","fields":[],"entry_id":0,"docs":["The session key acting for the owner has expired."]},{"name":"SessionNotAllowed","fields":[],"entry_id":0,"docs":["The session key acting for the owner may not perform this action."]},{"name":"BadSession","fields":[],"entry_id":0,"docs":["Session key, duration or action list is invalid."]}]}]);
+        this._typeResolver = new TypeResolver([{"name":"VaultError","kind":"enum","variants":[{"name":"Paused","fields":[],"entry_id":0},{"name":"ZeroAddress","fields":[],"entry_id":0},{"name":"ZeroAmount","fields":[],"entry_id":0},{"name":"BelowMinimum","fields":[{"name":"min","type":"U256"}],"entry_id":0},{"name":"InsufficientShares","fields":[],"entry_id":0},{"name":"InsufficientBalance","fields":[],"entry_id":0},{"name":"InsufficientAllowance","fields":[],"entry_id":0},{"name":"InsufficientReserve","fields":[{"name":"available","type":"U256"}],"entry_id":0,"docs":["The vault's distributable assets cannot cover this payout; nothing changed."]},{"name":"Unauthorized","fields":[],"entry_id":0},{"name":"Overflow","fields":[],"entry_id":0},{"name":"BadConfig","fields":[],"entry_id":0},{"name":"UnbondNotFound","fields":[],"entry_id":0},{"name":"UnbondNotReady","fields":[{"name":"claimable_at","type":"u64"}],"entry_id":0},{"name":"TokenRejected","fields":[{"type":"String"}],"entry_id":0,"docs":["The underlying token rejected the transfer (allowance, balance, paused)."]},{"name":"TokenCall","fields":[{"type":"String"}],"entry_id":0,"docs":["The cross-program call failed to complete (timeout, transport, panic)."]},{"name":"NotEnoughGas","fields":[{"name":"required","type":"u64"}],"entry_id":0,"docs":["The message carried less gas than the async flow needs; nothing was moved."]},{"name":"SessionExpired","fields":[],"entry_id":0,"docs":["The session key acting for the owner has expired."]},{"name":"SessionNotAllowed","fields":[],"entry_id":0,"docs":["The session key acting for the owner may not perform this action."]},{"name":"BadSession","fields":[],"entry_id":0,"docs":["Session key, duration or action list is invalid, or no matching proposal exists."]}]}]);
     }
     private get registry() {
         return this._typeResolver.registry;
     }
     public get interfaceId(): InterfaceId {
-        return InterfaceId.from("0xb938c6ed1b8ca8d0");
+        return InterfaceId.from("0x886e850e2c9f318b");
     }
     public allowance(owner: ActorId, spender: ActorId): QueryBuilderWithHeader<bigint> {
         return new QueryBuilderWithHeader<bigint>(
@@ -246,7 +249,9 @@ export interface RedeemPreview { assets: bigint; fee: bigint; net: bigint }
 
 /**
  * A session key registered by an owner: messages signed by `key` act for the owner until
- * `expires_at`. Payouts always go to the owner, never to the key.
+ * `expires_at`. Payouts always go to the owner, never to the key. A session is proposed by
+ * the owner and only takes effect once the key itself accepts it, so nobody can bind an
+ * address they do not control.
  */
 export interface Session { key: ActorId; expires_at: number; actions: SessionAction[] }
 
@@ -258,7 +263,7 @@ export type SessionAction = "Deposit" | "Redeem" | "Unbond" | "Claim";
 export interface Unbond { id: number; shares: bigint; assets: bigint; requested_at: number; claimable_at: number }
 
 
-export interface VaultInfo { underlying: ActorId; admin: ActorId; name: string; $symbol: string; decimals: number; rate: bigint; apy_bps: number; instant_fee_bps: number; unbond_period_secs: number; total_shares: bigint; total_assets: bigint; holdings: bigint; fees_accrued: bigint; unbonding_total: bigint; min_deposit: bigint; paused: boolean; last_accrual_at: number }
+export interface VaultInfo { underlying: ActorId; admin: ActorId; name: string; $symbol: string; decimals: number; rate: bigint; apy_bps: number; instant_fee_bps: number; unbond_period_secs: number; vesting_period_secs: number; total_shares: bigint; total_assets: bigint; holdings: bigint; distributable: bigint; locked_rewards: bigint; vesting_ends_at: number; fees_accrued: bigint; unbonding_total: bigint; min_deposit: bigint; paused: boolean }
 
 export class VaultService {
     private _typeResolver: TypeResolver;
@@ -267,23 +272,23 @@ export class VaultService {
         private _programId: HexString,
         private _routeIdx: number = 0,
     ) {
-        this._typeResolver = new TypeResolver([{"name":"Position","kind":"struct","fields":[{"name":"shares","type":"U256"},{"name":"assets","type":"U256"}]}, {"name":"RedeemPreview","kind":"struct","fields":[{"name":"assets","type":"U256"},{"name":"fee","type":"U256"},{"name":"net","type":"U256"}]}, {"name":"Session","kind":"struct","fields":[{"name":"key","type":"ActorId"},{"name":"expires_at","type":"u64"},{"name":"actions","type":{"kind":"slice","item":{"kind":"named","name":"SessionAction"}}}],"docs":["A session key registered by an owner: messages signed by `key` act for the owner until","`expires_at`. Payouts always go to the owner, never to the key."]}, {"name":"SessionAction","kind":"enum","variants":[{"name":"Deposit","fields":[],"entry_id":0},{"name":"Redeem","fields":[],"entry_id":0},{"name":"Unbond","fields":[],"entry_id":0},{"name":"Claim","fields":[],"entry_id":0}],"docs":["Actions a session key may perform for its owner."]}, {"name":"Unbond","kind":"struct","fields":[{"name":"id","type":"u64"},{"name":"shares","type":"U256"},{"name":"assets","type":"U256"},{"name":"requested_at","type":"u64"},{"name":"claimable_at","type":"u64"}]}, {"name":"VaultError","kind":"enum","variants":[{"name":"Paused","fields":[],"entry_id":0},{"name":"ZeroAddress","fields":[],"entry_id":0},{"name":"ZeroAmount","fields":[],"entry_id":0},{"name":"BelowMinimum","fields":[{"name":"min","type":"U256"}],"entry_id":0},{"name":"InsufficientShares","fields":[],"entry_id":0},{"name":"InsufficientBalance","fields":[],"entry_id":0},{"name":"InsufficientAllowance","fields":[],"entry_id":0},{"name":"Unauthorized","fields":[],"entry_id":0},{"name":"Overflow","fields":[],"entry_id":0},{"name":"BadConfig","fields":[],"entry_id":0},{"name":"UnbondNotFound","fields":[],"entry_id":0},{"name":"UnbondNotReady","fields":[{"name":"claimable_at","type":"u64"}],"entry_id":0},{"name":"TokenRejected","fields":[{"type":"String"}],"entry_id":0,"docs":["The underlying token rejected the transfer (allowance, balance, paused)."]},{"name":"TokenCall","fields":[{"type":"String"}],"entry_id":0,"docs":["The cross-program call failed to complete (timeout, transport, panic)."]},{"name":"NotEnoughGas","fields":[{"name":"required","type":"u64"}],"entry_id":0,"docs":["The message carried less gas than the async flow needs; nothing was moved."]},{"name":"SessionExpired","fields":[],"entry_id":0,"docs":["The session key acting for the owner has expired."]},{"name":"SessionNotAllowed","fields":[],"entry_id":0,"docs":["The session key acting for the owner may not perform this action."]},{"name":"BadSession","fields":[],"entry_id":0,"docs":["Session key, duration or action list is invalid."]}]}, {"name":"VaultInfo","kind":"struct","fields":[{"name":"underlying","type":"ActorId"},{"name":"admin","type":"ActorId"},{"name":"name","type":"String"},{"name":"symbol","type":"String"},{"name":"decimals","type":"u8"},{"name":"rate","type":"U256","docs":["Assets per share scaled by 1e18, projected to now."]},{"name":"apy_bps","type":"u32"},{"name":"instant_fee_bps","type":"u32"},{"name":"unbond_period_secs","type":"u64"},{"name":"total_shares","type":"U256"},{"name":"total_assets","type":"U256","docs":["Assets owed to share holders at the projected rate."]},{"name":"holdings","type":"U256","docs":["Underlying the vault physically holds."]},{"name":"fees_accrued","type":"U256"},{"name":"unbonding_total","type":"U256"},{"name":"min_deposit","type":"U256"},{"name":"paused","type":"bool"},{"name":"last_accrual_at","type":"u64"}]}]);
+        this._typeResolver = new TypeResolver([{"name":"Position","kind":"struct","fields":[{"name":"shares","type":"U256"},{"name":"assets","type":"U256"}]}, {"name":"RedeemPreview","kind":"struct","fields":[{"name":"assets","type":"U256"},{"name":"fee","type":"U256"},{"name":"net","type":"U256"}]}, {"name":"Session","kind":"struct","fields":[{"name":"key","type":"ActorId"},{"name":"expires_at","type":"u64"},{"name":"actions","type":{"kind":"slice","item":{"kind":"named","name":"SessionAction"}}}],"docs":["A session key registered by an owner: messages signed by `key` act for the owner until","`expires_at`. Payouts always go to the owner, never to the key. A session is proposed by","the owner and only takes effect once the key itself accepts it, so nobody can bind an","address they do not control."]}, {"name":"SessionAction","kind":"enum","variants":[{"name":"Deposit","fields":[],"entry_id":0},{"name":"Redeem","fields":[],"entry_id":0},{"name":"Unbond","fields":[],"entry_id":0},{"name":"Claim","fields":[],"entry_id":0}],"docs":["Actions a session key may perform for its owner."]}, {"name":"Unbond","kind":"struct","fields":[{"name":"id","type":"u64"},{"name":"shares","type":"U256"},{"name":"assets","type":"U256"},{"name":"requested_at","type":"u64"},{"name":"claimable_at","type":"u64"}]}, {"name":"VaultError","kind":"enum","variants":[{"name":"Paused","fields":[],"entry_id":0},{"name":"ZeroAddress","fields":[],"entry_id":0},{"name":"ZeroAmount","fields":[],"entry_id":0},{"name":"BelowMinimum","fields":[{"name":"min","type":"U256"}],"entry_id":0},{"name":"InsufficientShares","fields":[],"entry_id":0},{"name":"InsufficientBalance","fields":[],"entry_id":0},{"name":"InsufficientAllowance","fields":[],"entry_id":0},{"name":"InsufficientReserve","fields":[{"name":"available","type":"U256"}],"entry_id":0,"docs":["The vault's distributable assets cannot cover this payout; nothing changed."]},{"name":"Unauthorized","fields":[],"entry_id":0},{"name":"Overflow","fields":[],"entry_id":0},{"name":"BadConfig","fields":[],"entry_id":0},{"name":"UnbondNotFound","fields":[],"entry_id":0},{"name":"UnbondNotReady","fields":[{"name":"claimable_at","type":"u64"}],"entry_id":0},{"name":"TokenRejected","fields":[{"type":"String"}],"entry_id":0,"docs":["The underlying token rejected the transfer (allowance, balance, paused)."]},{"name":"TokenCall","fields":[{"type":"String"}],"entry_id":0,"docs":["The cross-program call failed to complete (timeout, transport, panic)."]},{"name":"NotEnoughGas","fields":[{"name":"required","type":"u64"}],"entry_id":0,"docs":["The message carried less gas than the async flow needs; nothing was moved."]},{"name":"SessionExpired","fields":[],"entry_id":0,"docs":["The session key acting for the owner has expired."]},{"name":"SessionNotAllowed","fields":[],"entry_id":0,"docs":["The session key acting for the owner may not perform this action."]},{"name":"BadSession","fields":[],"entry_id":0,"docs":["Session key, duration or action list is invalid, or no matching proposal exists."]}]}, {"name":"VaultInfo","kind":"struct","fields":[{"name":"underlying","type":"ActorId"},{"name":"admin","type":"ActorId"},{"name":"name","type":"String"},{"name":"symbol","type":"String"},{"name":"decimals","type":"u8"},{"name":"rate","type":"U256","docs":["Assets per share scaled by 1e18: distributable assets over shares, now."]},{"name":"apy_bps","type":"u32","docs":["Annualised release rate of the rewards currently vesting, over distributable assets.","Zero once the current tranche has fully vested."]},{"name":"instant_fee_bps","type":"u32"},{"name":"unbond_period_secs","type":"u64"},{"name":"vesting_period_secs","type":"u64"},{"name":"total_shares","type":"U256"},{"name":"total_assets","type":"U256","docs":["Assets owed to share holders: the distributable amount."]},{"name":"holdings","type":"U256","docs":["Underlying the vault physically holds (deposits, rewards, fees, unbonds)."]},{"name":"distributable","type":"U256","docs":["Holdings minus fees, unbonds and rewards still vesting."]},{"name":"locked_rewards","type":"U256","docs":["Rewards not yet released."]},{"name":"vesting_ends_at","type":"u64","docs":["When the current tranche is fully vested (0 when nothing is vesting)."]},{"name":"fees_accrued","type":"U256"},{"name":"unbonding_total","type":"U256"},{"name":"min_deposit","type":"U256"},{"name":"paused","type":"bool"}]}]);
     }
     private get registry() {
         return this._typeResolver.registry;
     }
     public get interfaceId(): InterfaceId {
-        return InterfaceId.from("0x535c61105b77a62a");
+        return InterfaceId.from("0x1ed36241921cfe39");
     }
-    public accrue(): TransactionBuilderWithHeader<bigint> {
-        return new TransactionBuilderWithHeader<bigint>(
+    public acceptSession(owner: ActorId): TransactionBuilderWithHeader<{ ok: Session } | { err: VaultError }> {
+        return new TransactionBuilderWithHeader<{ ok: Session } | { err: VaultError }>(
             this._api,
             this.registry,
             "send_message",
             SailsMessageHeader.v1(this.interfaceId, 0, this._routeIdx),
-            null,
-            null,
-            this._typeResolver.getTypeDeclString("U256"),
+            owner,
+            this._typeResolver.getTypeDeclString("ActorId"),
+            this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":[{"kind":"named","name":"Session"},{"kind":"named","name":"VaultError"}]}),
             this._programId,
         );
     }
@@ -340,12 +345,25 @@ export class VaultService {
         );
     }
 
+    public fundRewards(assets: bigint): TransactionBuilderWithHeader<{ ok: bigint } | { err: VaultError }> {
+        return new TransactionBuilderWithHeader<{ ok: bigint } | { err: VaultError }>(
+            this._api,
+            this.registry,
+            "send_message",
+            SailsMessageHeader.v1(this.interfaceId, 5, this._routeIdx),
+            assets,
+            this._typeResolver.getTypeDeclString("U256"),
+            this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["U256",{"kind":"named","name":"VaultError"}]}),
+            this._programId,
+        );
+    }
+
     public info(): QueryBuilderWithHeader<VaultInfo> {
         return new QueryBuilderWithHeader<VaultInfo>(
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 5, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 6, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString({"kind":"named","name":"VaultInfo"}),
@@ -357,11 +375,23 @@ export class VaultService {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 6, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 7, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"VaultError"}]}),
             this._programId,
+        );
+    }
+
+    public pendingSession(owner: ActorId): QueryBuilderWithHeader<Session | null> {
+        return new QueryBuilderWithHeader<Session | null>(
+            this._api,
+            this.registry,
+            this._programId,
+            SailsMessageHeader.v1(this.interfaceId, 8, this._routeIdx),
+            owner,
+            this._typeResolver.getTypeDeclString("ActorId"),
+            this._typeResolver.getTypeDeclString({"kind":"named","name":"Option","generics":[{"kind":"named","name":"Session"}]}),
         );
     }
 
@@ -370,7 +400,7 @@ export class VaultService {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 7, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 9, this._routeIdx),
             account,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Position"}),
@@ -382,7 +412,7 @@ export class VaultService {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 8, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 10, this._routeIdx),
             assets,
             this._typeResolver.getTypeDeclString("U256"),
             this._typeResolver.getTypeDeclString("U256"),
@@ -394,7 +424,7 @@ export class VaultService {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 9, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 11, this._routeIdx),
             shares,
             this._typeResolver.getTypeDeclString("U256"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"RedeemPreview"}),
@@ -406,7 +436,7 @@ export class VaultService {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 10, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 12, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString("U256"),
@@ -418,7 +448,7 @@ export class VaultService {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 11, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 13, this._routeIdx),
             shares,
             this._typeResolver.getTypeDeclString("U256"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":[{"kind":"named","name":"RedeemPreview"},{"kind":"named","name":"VaultError"}]}),
@@ -431,7 +461,7 @@ export class VaultService {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 12, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 14, this._routeIdx),
             shares,
             this._typeResolver.getTypeDeclString("U256"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":[{"kind":"named","name":"Unbond"},{"kind":"named","name":"VaultError"}]}),
@@ -444,7 +474,7 @@ export class VaultService {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 13, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 15, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"VaultError"}]}),
@@ -457,7 +487,7 @@ export class VaultService {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 14, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 16, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString("bool"),
@@ -470,7 +500,7 @@ export class VaultService {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 15, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 17, this._routeIdx),
             owner,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Option","generics":[{"kind":"named","name":"Session"}]}),
@@ -482,34 +512,21 @@ export class VaultService {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 16, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 18, this._routeIdx),
             key,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Option","generics":["ActorId"]}),
         );
     }
 
-    public setConfig(apy_bps: number, instant_fee_bps: number, unbond_period_secs: number): TransactionBuilderWithHeader<{ ok: boolean } | { err: VaultError }> {
+    public setConfig(instant_fee_bps: number, unbond_period_secs: number, vesting_period_secs: number): TransactionBuilderWithHeader<{ ok: boolean } | { err: VaultError }> {
         return new TransactionBuilderWithHeader<{ ok: boolean } | { err: VaultError }>(
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 17, this._routeIdx),
-            [apy_bps, instant_fee_bps, unbond_period_secs],
-            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["u32", "u32", "u64"]}),
-            this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"VaultError"}]}),
-            this._programId,
-        );
-    }
-
-    public topUpReserve(assets: bigint): TransactionBuilderWithHeader<{ ok: boolean } | { err: VaultError }> {
-        return new TransactionBuilderWithHeader<{ ok: boolean } | { err: VaultError }>(
-            this._api,
-            this.registry,
-            "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 18, this._routeIdx),
-            assets,
-            this._typeResolver.getTypeDeclString("U256"),
+            SailsMessageHeader.v1(this.interfaceId, 19, this._routeIdx),
+            [instant_fee_bps, unbond_period_secs, vesting_period_secs],
+            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["u32", "u64", "u64"]}),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"VaultError"}]}),
             this._programId,
         );
@@ -520,7 +537,7 @@ export class VaultService {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 19, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 20, this._routeIdx),
             to,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"VaultError"}]}),
@@ -533,26 +550,11 @@ export class VaultService {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 20, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 21, this._routeIdx),
             account,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"slice","item":{"kind":"named","name":"Unbond"}}),
         );
-    }
-
-    public subscribeToAccruedEvent<T = { rate: bigint; total_assets: bigint }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
-        const interfaceIdu64 = this.interfaceId.asU64();
-        const eventFields = {"fields":[{"name":"rate","type":"U256"},{"name":"total_assets","type":"U256"}]}.fields as IStructField[];
-        const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);
-        return this._api.gearEvents.subscribeToGearEvent("UserMessageSent", ({ data: { message } }) => {
-            if (!message.source.eq(this._programId)) return;
-            if (!message.destination.eq(ZERO_ADDRESS)) return;
-
-            const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 0) {
-                callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
-            }
-        });
     }
 
     public subscribeToAdminTransferredEvent<T = { $from: ActorId; to: ActorId }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
@@ -564,7 +566,7 @@ export class VaultService {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 1) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 0) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -579,22 +581,22 @@ export class VaultService {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 2) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 1) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
     }
 
-    public subscribeToConfigChangedEvent<T = { apy_bps: number; instant_fee_bps: number; unbond_period_secs: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
+    public subscribeToConfigChangedEvent<T = { instant_fee_bps: number; unbond_period_secs: number; vesting_period_secs: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
         const interfaceIdu64 = this.interfaceId.asU64();
-        const eventFields = {"fields":[{"name":"apy_bps","type":"u32"},{"name":"instant_fee_bps","type":"u32"},{"name":"unbond_period_secs","type":"u64"}]}.fields as IStructField[];
+        const eventFields = {"fields":[{"name":"instant_fee_bps","type":"u32"},{"name":"unbond_period_secs","type":"u64"},{"name":"vesting_period_secs","type":"u64"}]}.fields as IStructField[];
         const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);
         return this._api.gearEvents.subscribeToGearEvent("UserMessageSent", ({ data: { message } }) => {
             if (!message.source.eq(this._programId)) return;
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 3) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 2) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -609,7 +611,7 @@ export class VaultService {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 4) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 3) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -624,7 +626,7 @@ export class VaultService {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 5) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 4) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -639,7 +641,7 @@ export class VaultService {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 6) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 5) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -654,22 +656,7 @@ export class VaultService {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 7) {
-                callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
-            }
-        });
-    }
-
-    public subscribeToReserveToppedUpEvent<T = { assets: bigint }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
-        const interfaceIdu64 = this.interfaceId.asU64();
-        const eventFields = {"fields":[{"name":"assets","type":"U256"}]}.fields as IStructField[];
-        const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);
-        return this._api.gearEvents.subscribeToGearEvent("UserMessageSent", ({ data: { message } }) => {
-            if (!message.source.eq(this._programId)) return;
-            if (!message.destination.eq(ZERO_ADDRESS)) return;
-
-            const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 8) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 6) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -684,13 +671,43 @@ export class VaultService {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 7) {
+                callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
+            }
+        });
+    }
+
+    public subscribeToRewardsFundedEvent<T = { $from: ActorId; assets: bigint; holdings: bigint; vesting_ends_at: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
+        const interfaceIdu64 = this.interfaceId.asU64();
+        const eventFields = {"fields":[{"name":"from","type":"ActorId"},{"name":"assets","type":"U256"},{"name":"holdings","type":"U256"},{"name":"vesting_ends_at","type":"u64"}]}.fields as IStructField[];
+        const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);
+        return this._api.gearEvents.subscribeToGearEvent("UserMessageSent", ({ data: { message } }) => {
+            if (!message.source.eq(this._programId)) return;
+            if (!message.destination.eq(ZERO_ADDRESS)) return;
+
+            const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 8) {
+                callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
+            }
+        });
+    }
+
+    public subscribeToSessionAcceptedEvent<T = { owner: ActorId; key: ActorId; expires_at: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
+        const interfaceIdu64 = this.interfaceId.asU64();
+        const eventFields = {"fields":[{"name":"owner","type":"ActorId"},{"name":"key","type":"ActorId"},{"name":"expires_at","type":"u64"}]}.fields as IStructField[];
+        const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);
+        return this._api.gearEvents.subscribeToGearEvent("UserMessageSent", ({ data: { message } }) => {
+            if (!message.source.eq(this._programId)) return;
+            if (!message.destination.eq(ZERO_ADDRESS)) return;
+
+            const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
             if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 9) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
     }
 
-    public subscribeToSessionCreatedEvent<T = { owner: ActorId; key: ActorId; expires_at: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
+    public subscribeToSessionProposedEvent<T = { owner: ActorId; key: ActorId; expires_at: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
         const interfaceIdu64 = this.interfaceId.asU64();
         const eventFields = {"fields":[{"name":"owner","type":"ActorId"},{"name":"key","type":"ActorId"},{"name":"expires_at","type":"u64"}]}.fields as IStructField[];
         const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);

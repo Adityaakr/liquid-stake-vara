@@ -14,8 +14,10 @@ export type VaultStats = {
   minDeposit: bigint;
   totalShares: bigint;
   totalAssets: bigint;
-  /** Underlying the vault physically holds (deposits and reserve). */
+  /** Underlying the vault physically holds (deposits, rewards, fees, unbonds). */
   holdings: bigint;
+  /** ms timestamp the current rewards tranche is fully vested at; 0 when nothing is vesting (apy is 0 then). */
+  vestingEndsAt: number;
   tvlUsd: number;
   paused: boolean;
 };
@@ -27,6 +29,8 @@ export type ProtocolStats = {
   /** kVARA instant exit fee and unbond period as the pool reports them. */
   stakeFeeBps: bigint;
   stakeUnbondSecs: number;
+  /** ms timestamp the kVARA pool's current rewards tranche is fully vested at; 0 when nothing is vesting. */
+  stakeVestingEndsAt: number;
   vaults: Record<VaultAsset, VaultStats>;
   tvlUsd: number;
   totalStakedVara: bigint;
@@ -36,7 +40,7 @@ export type ProtocolStats = {
   /** last three eras' rates for the compound timeline */
   rateHistory: { era: number; rate: bigint }[];
   varaPriceUsd: number;
-  /** ms timestamp the rates above were computed at; the UI projects them forward at the APY. */
+  /** ms timestamp the rates above were computed at; the UI projects them forward at the APY until the tranche is vested. */
   at: number;
   /** Latest block seen on the node, when the adapter talks to a chain. */
   blockNumber?: number;

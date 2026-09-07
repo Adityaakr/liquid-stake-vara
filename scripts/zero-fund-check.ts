@@ -12,17 +12,16 @@ async function main() {
   const wasm = readFileSync('programs/vault/target/wasm32-gear/release/vault.opt.wasm');
   const token = new DemoToken(api, dep.programs.USDC.token);
   const vault = new Vault(api);
-  const t = await vault.newCtorFromCode(wasm, dep.programs.USDC.token, 'zero fund', 'zUSDC', 6, 100_000, 0, 30, 0n).withAccount(alice).withGas(150_000_000_000n).signAndSend();
+  const t = await vault.newCtorFromCode(wasm, dep.programs.USDC.token, 'zero fund', 'zUSDC', 6, 0, 30, 3_600, 0n).withAccount(alice).withGas(150_000_000_000n).signAndSend();
   await t.response();
   console.log('vault', vault.programId, 'balance', (await api.balance.findOut(vault.programId)).toString());
-  await (await token.admin.grantMinter(vault.programId).withAccount(alice).withGas(30_000_000_000n).signAndSend()).response();
   await (await token.faucet.claim().withAccount(dave).withGas(30_000_000_000n).signAndSend()).response();
   await (await token.vft.approve(vault.programId, 2n ** 256n - 1n).withAccount(dave).withGas(30_000_000_000n).signAndSend()).response();
   const d = await (await vault.vault.deposit(500_000_000n).withAccount(dave).withGas(100_000_000_000n).signAndSend()).response();
   console.log('deposit', JSON.stringify(d));
   await new Promise((r) => setTimeout(r, 6000));
   const r = await (await vault.vault.redeem(BigInt(String(await vault.vft.balanceOf(decodeAddress(dave.address)).call()))).withAccount(dave).withGas(100_000_000_000n).signAndSend()).response();
-  console.log('redeem with mint fallback', JSON.stringify(r));
+  console.log('redeem', JSON.stringify(r));
   console.log('vault balance after', (await api.balance.findOut(vault.programId)).toString());
   await api.disconnect();
 }

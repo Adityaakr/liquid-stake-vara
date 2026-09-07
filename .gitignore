@@ -12,3 +12,4 @@ screenshots
 programs/*/target/
 deployments/local.json
 .local
+deployments/edge.json

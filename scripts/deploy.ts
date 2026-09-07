@@ -5,7 +5,7 @@
  *
  * kVARA pool: upload + init, fund it with VARA for the messages it sends, optionally fund a rewards
  * reserve (--rewards VARA) and seed a stake (--stake VARA). Per stable asset: upload token code + init,
- * upload vault code + init (underlying = token), grant the vault the minter role, fund it. Writes
+ * upload vault code + init (underlying = token), fund it, seed it and fund its first rewards tranche. Writes
  * program ids to the output file and prints the .env lines.
  *
  * Requires the programs to be built first:
@@ -18,29 +18,40 @@ import { Vault } from '../src/chain/idl/vault';
 import { VaraPool } from '../src/chain/idl/vara_pool';
 import { stablePriceAt, varaRateAt } from '../src/chain/varaPool';
 
-const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1] ?? 'true'] : [])).filter((x) => x.length));
+// `--flag value` or a bare `--flag` (also when the next token is another flag).
+const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => (a.startsWith('--') ? [a.slice(2), all[i + 1] === undefined || all[i + 1].startsWith('--') ? 'true' : all[i + 1]] : [])).filter((x) => x.length));
 const RPC = args.rpc ?? process.env.VARA_RPC ?? 'wss://rpc.vara.network';
 const OUT = args.out ?? (RPC.includes('127.0.0.1') || RPC.includes('localhost') ? 'deployments/local.json' : 'deployments/mainnet.json');
 const SEED = process.env.DEPLOYER_SEED;
 if (!SEED) { console.error('Set DEPLOYER_SEED to the deployer mnemonic, seed or //Alice for a local node.'); process.exit(1); }
 
 const ONE = 1_000_000n; // 6 decimals
+/** Per asset: names, and the APY the first rewards tranche is sized for (`--rewards-<asset>` overrides the amount). */
 const ASSETS = [
-  { asset: 'USDC', tokenName: 'Vale Demo USDC', vaultName: 'Vale kUSDC', apyBps: 790 },
-  { asset: 'USDT', tokenName: 'Vale Demo USDT', vaultName: 'Vale kUSDT', apyBps: 840 },
+  { asset: 'USDC', tokenName: 'Vale Demo USDC', vaultName: 'Vale kUSDC', apyBps: 790n },
+  { asset: 'USDT', tokenName: 'Vale Demo USDT', vaultName: 'Vale kUSDT', apyBps: 840n },
 ] as const;
 const FAUCET_AMOUNT = 1_000n * ONE;
 const FAUCET_COOLDOWN_SECS = Number(args.cooldown ?? 6 * 3600);
 const INSTANT_FEE_BPS = 30;
 const UNBOND_SECS = Number(args.unbond ?? 7 * 86_400);
+/** Each rewards tranche vests linearly over this long (the programs accept an hour to a year). */
+const VESTING_SECS = Number(args.vesting ?? 7 * 86_400);
 const VAULT_FUNDING_VARA = BigInt(args.fund ?? 15); // pays for the vault's outgoing messages
 /** Whole tokens the deployer deposits into each vault after deploy so the pool is not empty. */
 const SEED_TOKENS = BigInt(args.seed ?? 0);
-/** kVARA pool: 35% APY on the rate; VARA the deployer stakes and funds as rewards after deploy. */
-const POOL_APY_BPS = 3500;
+/** kVARA pool: VARA the deployer stakes after deploy, and the APY its first rewards tranche is sized for. */
+const POOL_APY_BPS = 3500n;
 const SEED_STAKE_VARA = BigInt(args.stake ?? 0);
-const REWARDS_VARA = BigInt(args.rewards ?? 0);
 const ONE_VARA = 10n ** 12n;
+const YEAR_SECS = 31_536_000n;
+/**
+ * Rewards that make one vesting period pay `apyBps` on `principal`: `principal × apy × vesting / year`.
+ * The programs report the APY as the tranche's release rate over what holders own, so seeding with
+ * this amount shows exactly the target APY until the tranche runs out.
+ */
+const tranche = (principal: bigint, apyBps: bigint) => (principal * apyBps * BigInt(VESTING_SECS)) / (10_000n * YEAR_SECS);
+const REWARDS_VARA = args.rewards !== undefined ? BigInt(args.rewards) * ONE_VARA : tranche(SEED_STAKE_VARA * ONE_VARA, POOL_APY_BPS);
 /**
  * Starting rates. By default each pool continues at the published rate for today (the app's
  * simulation runs on the same figures), scaled from 1e9 to the programs' 1e18. `--fresh` starts
@@ -90,24 +101,25 @@ async function main() {
 
   console.log('\n== kVARA pool');
   const pool = new VaraPool(api);
-  const poolTx = pool.newCtorFromCode(poolWasm, 'Vale kVARA', 'kVARA', 12, POOL_APY_BPS, INSTANT_FEE_BPS, UNBOND_SECS, startRate(varaRateAt(Date.now()))).withAccount(pair).withGas(GAS_INIT);
+  const poolTx = pool.newCtorFromCode(poolWasm, 'Vale kVARA', 'kVARA', 12, INSTANT_FEE_BPS, UNBOND_SECS, VESTING_SECS, startRate(varaRateAt(Date.now()))).withAccount(pair).withGas(GAS_INIT);
   await (await poolTx.signAndSend()).response();
   console.log(`pool kVARA: ${pool.programId}`);
   await signAndWait(api.balance.transfer(pool.programId, VAULT_FUNDING_VARA * ONE_VARA), pair);
   console.log(`pool funded with ${VAULT_FUNDING_VARA} VARA for outgoing messages`);
-  if (SEED_STAKE_VARA > 0n || REWARDS_VARA > 0n) await ensureDevBalance(api, pair, (SEED_STAKE_VARA + REWARDS_VARA + 100n) * ONE_VARA);
-  if (REWARDS_VARA > 0n) {
-    const r = await (await pool.pool.fundRewards().withValue(REWARDS_VARA * ONE_VARA).withAccount(pair).withGas(GAS_CALL).signAndSend()).response();
-    if (!('ok' in r)) throw new Error(`fund rewards failed: ${JSON.stringify(r)}`);
-    console.log(`rewards reserve funded with ${REWARDS_VARA.toLocaleString('en-US')} VARA`);
-  }
+  if (SEED_STAKE_VARA > 0n || REWARDS_VARA > 0n) await ensureDevBalance(api, pair, SEED_STAKE_VARA * ONE_VARA + REWARDS_VARA + 100n * ONE_VARA);
+  // Stake first: rewards funded into an empty pool vest to nobody and are swept to fees.
   if (SEED_STAKE_VARA > 0n) {
     const r = await (await pool.pool.stake().withValue(SEED_STAKE_VARA * ONE_VARA).withAccount(pair).withGas(GAS_CALL).signAndSend()).response();
     if (!('ok' in r)) throw new Error(`seed stake failed: ${JSON.stringify(r)}`);
     console.log(`seeded the pool with ${SEED_STAKE_VARA.toLocaleString('en-US')} VARA from the deployer`);
   }
+  if (REWARDS_VARA > 0n) {
+    const r = await (await pool.pool.fundRewards().withValue(REWARDS_VARA).withAccount(pair).withGas(GAS_CALL).signAndSend()).response();
+    if (!('ok' in r)) throw new Error(`fund rewards failed: ${JSON.stringify(r)}`);
+    console.log(`rewards tranche funded with ${(Number(REWARDS_VARA) / 1e12).toLocaleString('en-US')} VARA, vesting over ${VESTING_SECS}s`);
+  }
   const poolInfo = await pool.pool.info().call();
-  console.log(`pool info: rate ${poolInfo.rate} apy ${poolInfo.apy_bps}bps unbond ${poolInfo.unbond_period_secs}s staked ${Number(poolInfo.total_assets) / 1e12} VARA reserve ${Number(poolInfo.reserve) / 1e12} VARA`);
+  console.log(`pool info: rate ${poolInfo.rate} apy ${poolInfo.apy_bps}bps unbond ${poolInfo.unbond_period_secs}s vesting ${poolInfo.vesting_period_secs}s staked ${Number(poolInfo.total_assets) / 1e12} VARA reserve ${Number(poolInfo.reserve) / 1e12} VARA locked ${Number(poolInfo.locked_rewards) / 1e12} VARA`);
 
   const out: Record<string, { token: string; vault: string }> = {};
   for (const a of ASSETS) {
@@ -119,30 +131,36 @@ async function main() {
     console.log(`token ${a.asset}: ${token.programId}`);
 
     const vault = new Vault(api);
-    const vaultTx = vault.newCtorFromCode(vaultWasm, token.programId, a.vaultName, `k${a.asset}`, 6, a.apyBps, INSTANT_FEE_BPS, UNBOND_SECS, startRate(stablePriceAt(a.asset, Date.now()))).withAccount(pair).withGas(GAS_INIT);
+    const vaultTx = vault.newCtorFromCode(vaultWasm, token.programId, a.vaultName, `k${a.asset}`, 6, INSTANT_FEE_BPS, UNBOND_SECS, VESTING_SECS, startRate(stablePriceAt(a.asset, Date.now()))).withAccount(pair).withGas(GAS_INIT);
     const v = await vaultTx.signAndSend();
     await v.response();
     console.log(`vault k${a.asset}: ${vault.programId}`);
 
-    const grant = await token.admin.grantMinter(vault.programId).withAccount(pair).withGas(GAS_CALL).signAndSend();
-    const granted = await grant.response(); // throws on an error reply; `throws` functions come back unwrapped
-    if (granted !== true && !(typeof granted === 'object' && granted && 'ok' in granted)) throw new Error(`grantMinter failed: ${JSON.stringify(granted)}`);
-    console.log('vault granted minter role');
-
     await signAndWait(api.balance.transfer(vault.programId, VAULT_FUNDING_VARA * ONE_VARA), pair);
     console.log(`vault funded with ${VAULT_FUNDING_VARA} VARA for outgoing messages`);
 
-    if (SEED_TOKENS > 0n) {
+    const rewardsArg = args[`rewards-${a.asset.toLowerCase()}`];
+    const rewards = rewardsArg !== undefined ? BigInt(rewardsArg) * ONE : tranche(SEED_TOKENS * ONE, a.apyBps);
+    if (SEED_TOKENS > 0n || rewards > 0n) {
+      // The deployer mints demo tokens for the seed deposit and the first rewards tranche (rewards
+      // are real tokens in the vault: the vault never mints).
       const amount = SEED_TOKENS * ONE;
-      await (await token.admin.mint(decodeAddress(pair.address), amount).withAccount(pair).withGas(GAS_CALL).signAndSend()).response();
-      await (await token.vft.approve(vault.programId, amount).withAccount(pair).withGas(GAS_CALL).signAndSend()).response();
-      const seeded = await (await vault.vault.deposit(amount).withAccount(pair).withGas(100_000_000_000n).signAndSend()).response();
-      if (!(typeof seeded === 'object' && seeded && 'ok' in seeded)) throw new Error(`seed deposit failed: ${JSON.stringify(seeded)}`);
-      console.log(`seeded the vault with ${SEED_TOKENS.toLocaleString('en-US')} ${a.asset} from the deployer`);
+      await (await token.admin.mint(decodeAddress(pair.address), amount + rewards).withAccount(pair).withGas(GAS_CALL).signAndSend()).response();
+      await (await token.vft.approve(vault.programId, amount + rewards).withAccount(pair).withGas(GAS_CALL).signAndSend()).response();
+      if (amount > 0n) {
+        const seeded = await (await vault.vault.deposit(amount).withAccount(pair).withGas(100_000_000_000n).signAndSend()).response();
+        if (!(typeof seeded === 'object' && seeded && 'ok' in seeded)) throw new Error(`seed deposit failed: ${JSON.stringify(seeded)}`);
+        console.log(`seeded the vault with ${SEED_TOKENS.toLocaleString('en-US')} ${a.asset} from the deployer`);
+      }
+      if (rewards > 0n) {
+        const funded = await (await vault.vault.fundRewards(rewards).withAccount(pair).withGas(100_000_000_000n).signAndSend()).response();
+        if (!(typeof funded === 'object' && funded && 'ok' in funded)) throw new Error(`fund rewards failed: ${JSON.stringify(funded)}`);
+        console.log(`rewards tranche funded with ${(Number(rewards) / 1e6).toLocaleString('en-US')} ${a.asset}, vesting over ${VESTING_SECS}s`);
+      }
     }
 
     const info = await vault.vault.info().call();
-    console.log(`vault info: rate ${info.rate} apy ${info.apy_bps}bps unbond ${info.unbond_period_secs}s underlying ${info.underlying === decodeAddress(token.programId) || info.underlying === token.programId ? 'ok' : info.underlying}`);
+    console.log(`vault info: rate ${info.rate} apy ${info.apy_bps}bps unbond ${info.unbond_period_secs}s vesting ${info.vesting_period_secs}s locked ${Number(info.locked_rewards) / 1e6} underlying ${info.underlying === decodeAddress(token.programId) || info.underlying === token.programId ? 'ok' : info.underlying}`);
     out[a.asset] = { token: token.programId, vault: vault.programId };
   }
 

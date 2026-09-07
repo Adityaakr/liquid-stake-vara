@@ -93,6 +93,7 @@ export class MockAdapter implements StakingAdapter {
       totalShares: assetsToShares(totalAssets, rate),
       totalAssets,
       holdings: totalAssets,
+      vestingEndsAt: Infinity,
       tvlUsd: VAULT_TVL[asset],
       paused: false,
     };
@@ -106,6 +107,7 @@ export class MockAdapter implements StakingAdapter {
       stakeApyBps: APY_BPS,
       stakeFeeBps: INSTANT_UNSTAKE_FEE_BPS,
       stakeUnbondSecs: UNBONDING_MS / 1000,
+      stakeVestingEndsAt: Infinity,
       vaults: { USDT: this.vaultStats('USDT', now), USDC: this.vaultStats('USDC', now) },
       tvlUsd: (Number(STAKED_VARA) / Number(ONE_VARA)) * VARA_PRICE_USD + VAULT_TVL.USDT + VAULT_TVL.USDC,
       totalStakedVara: STAKED_VARA,
