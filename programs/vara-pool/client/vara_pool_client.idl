@@ -65,7 +65,7 @@ service Vft@0x72760694e848b0e7 {
     }
 }
 
-service Pool@0x736202f2ca7c8e83 {
+service Pool@0xa7f9b49ce1eb4b78 {
     events {
         AdminTransferred {
             from: ActorId,
@@ -116,6 +116,10 @@ service Pool@0x736202f2ca7c8e83 {
             shares: U256,
             rate: U256,
         },
+        SurplusRescued {
+            to: ActorId,
+            assets: U256,
+        },
         UnbondRequested {
             owner: ActorId,
             id: u64,
@@ -151,6 +155,7 @@ service Pool@0x736202f2ca7c8e83 {
         @query
         Rate() -> U256;
         RequestUnbond(shares: U256) -> Result<Unbond, PoolError>;
+        RescueSurplus(to: ActorId, assets: U256) -> Result<U256, PoolError>;
         Resume() -> Result<bool, PoolError>;
         RevokeSession() -> bool;
         @query
@@ -265,6 +270,6 @@ program VaraPoolClient {
     }
     services {
         Vft@0x72760694e848b0e7,
-        Pool@0x736202f2ca7c8e83,
+        Pool@0xa7f9b49ce1eb4b78,
     }
 }

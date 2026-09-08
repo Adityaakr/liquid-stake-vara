@@ -106,12 +106,18 @@ rate and no clock: the rate moves only when real assets move.
   later it adds one block of the pro-rata drip, far below the fee.
 - `apy_bps` in `Info()` is derived: the vesting tranche's release rate, annualised, over
   distributable assets. It is zero once the tranche has fully vested, until the next funding.
-- Shares and payouts round down (in the pool's favour). An empty pool keeps its last rate for the
-  next deposit; assets that belong to nobody (dust, rewards vested while empty) are swept into the
-  fee bucket rather than handed to the next depositor.
+- Shares and payouts round down (in the pool's favour). Every quote carries a virtual share and
+  asset offset priced at the pool's base rate (OpenZeppelin's ERC-4626 defence): emptying the pool
+  down to one share and donating cannot make later deposits round against their owners. An empty
+  pool keeps its last rate for the next deposit; assets that belong to nobody (dust, rewards vested
+  while empty) are swept into the fee bucket rather than handed to the next depositor.
+- Commands that take no value send any VARA attached to them back with the reply. What still ends
+  up on a program outside its books (a payout bounced by a program recipient, for instance) the
+  admin can return with `RescueSurplus(to, amount)`, which can never touch the reserve.
 - Sessions: `CreateSession(key, duration_secs, actions)` only proposes; the key sends
-  `AcceptSession(owner)` to activate it. `RevokeSession()` drops both. Queries `Session(owner)`,
-  `PendingSession(owner)`, `SessionOwner(key)`.
+  `AcceptSession(owner)` to activate it. `RevokeSession()` drops both. An expired session stops
+  binding the key. Queries `Session(owner)`, `PendingSession(owner)`, `SessionOwner(key)`.
+- Fees and unbond periods are bounded in the constructor and in `SetConfig` (10% and one year).
 
 ### kVARA pool (`Vft`, `Pool`)
 
@@ -119,7 +125,8 @@ The books above over native VARA. Everything is synchronous: value moves with th
 there are no cross-program calls and no partial states.
 
 - `Stake()` is payable: the attached VARA is the deposit, kVARA is minted at the current rate.
-  On any error the attached value comes back with the reply.
+  On any error the attached value comes back with the reply. Stakes and payouts are at least
+  at least 2 VARA to stake and 1 VARA (Vara's existential deposit) per payout, so a payout can never be dropped for landing below it and a whole position always clears the floor.
 - `Unstake(shares)` burns kVARA and sends VARA at the current rate minus the instant fee.
 - `RequestUnbond(shares)` locks VARA at the current rate and burns the kVARA; `Claim(id)` pays
   after the unbond period. Locked VARA no longer earns.
@@ -146,7 +153,13 @@ shares. `pnpm deploy` uses the published rates for the day unless `--fresh` is p
 - `Deposit(assets)` pulls the underlying with `TransferFrom` and mints shares once the tokens
   arrived; in-flight deposits are invisible to the rate until then.
 - `Redeem(shares)` burns shares, takes the payout out of holdings before the transfer, and pays
-  assets at the current rate minus the instant fee. A failed transfer restores everything.
+  assets at the current rate minus the instant fee. A refused transfer restores everything; the
+  fee only becomes collectable once the payout landed.
+- Token calls carry a reply deposit and wait up to 12 hours for the token's reply. A reply that
+  never comes is not a refusal: the call is recorded as unconfirmed (`Unconfirmed()` lists them),
+  the books assume the money moved, and the admin settles it with
+  `ResolveUnconfirmed(id, delivered)` once the token's state is known. A deposit the vault cannot
+  book after the tokens arrived (paused meanwhile, or a quote of zero shares) is handed back.
 - `RequestUnbond(shares)` burns shares and locks the assets at the current rate; `Claim(id)`
   pays after the unbond period.
 - `FundRewards(assets)` pulls the underlying from the caller (requires approval) into the next
@@ -154,7 +167,7 @@ shares. `pnpm deploy` uses the published rates for the day unless `--fresh` is p
 - Async commands refuse to start unless the message carries enough gas for every segment
   (`NotEnoughGas`), so a deposit can never move tokens without minting shares.
 - Admin: `SetConfig(fee_bps, unbond_secs, vesting_secs)`, `Pause`, `Resume`, `CollectFees`,
-  `TransferAdmin`.
+  `TransferAdmin`, `ResolveUnconfirmed`.
 
 Every user facing command replies with a typed result, so failures reach the app as readable
 messages.
@@ -187,7 +200,10 @@ pnpm session-smoke --rpc ws://127.0.0.1:9944                   # one-click sessi
 scripts/local.sh stop
 ```
 
-The test report and the design notes live in `docs/plans`.
+The test report, the design notes and the security audit (`2026-09-08-audit.md`) live in
+`docs/plans`. Property-based suites (`programs/*/app/tests/properties.rs`, proptest) drive
+random operation sequences against both state machines and check solvency, conservation, rate
+monotonicity and the round-trip bound after every step.
 
 ## Layout
 

@@ -394,7 +394,8 @@ export class GearAdapter implements StakingAdapter {
       vaults,
       tvlUsd: pool.tvlUsd + VAULT_ASSETS.reduce((s, a) => s + vaults[a].tvlUsd, 0),
       totalStakedVara: pool.staked,
-      bufferBps: pool.staked > 0n ? (pool.reserve * 10_000n) / pool.staked : 0n,
+      // VARA the pool holds beyond what stakers own (fees, unbonds, rewards still vesting), over what they own.
+      bufferBps: pool.staked > 0n ? ((pool.reserve - pool.staked) * 10_000n) / pool.staked : 0n,
       era: blockNumber,
       eraEndsAt: now + BLOCK_SECS * 1000,
       rateHistory: [2, 1, 0].map((n) => ({ era: blockNumber - n, rate: rateBlocksAgo(n) })),

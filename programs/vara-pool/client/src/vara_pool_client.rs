@@ -413,6 +413,11 @@ pub mod pool {
             &mut self,
             shares: U256,
         ) -> sails_rs::client::PendingCall<io::RequestUnbond, Self::Env>;
+        fn rescue_surplus(
+            &mut self,
+            to: ActorId,
+            assets: U256,
+        ) -> sails_rs::client::PendingCall<io::RescueSurplus, Self::Env>;
         fn resume(&mut self) -> sails_rs::client::PendingCall<io::Resume, Self::Env>;
         fn revoke_session(&mut self)
         -> sails_rs::client::PendingCall<io::RevokeSession, Self::Env>;
@@ -446,7 +451,7 @@ pub mod pool {
 
     impl sails_rs::client::Identifiable for PoolImpl {
         const INTERFACE_ID: sails_rs::InterfaceId =
-            sails_rs::InterfaceId::from_bytes_8([115, 98, 2, 242, 202, 124, 142, 131]);
+            sails_rs::InterfaceId::from_bytes_8([167, 249, 180, 156, 225, 235, 75, 120]);
     }
 
     impl<E: sails_rs::client::GearEnv> Pool for sails_rs::client::Service<PoolImpl, E> {
@@ -516,6 +521,13 @@ pub mod pool {
         ) -> sails_rs::client::PendingCall<io::RequestUnbond, Self::Env> {
             self.pending_call((shares,))
         }
+        fn rescue_surplus(
+            &mut self,
+            to: ActorId,
+            assets: U256,
+        ) -> sails_rs::client::PendingCall<io::RescueSurplus, Self::Env> {
+            self.pending_call((to, assets))
+        }
         fn resume(&mut self) -> sails_rs::client::PendingCall<io::Resume, Self::Env> {
             self.pending_call(())
         }
@@ -579,15 +591,16 @@ pub mod pool {
         sails_rs::io_struct_impl!(PreviewUnstake (shares: U256) -> super::UnstakePreview, 10, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(Rate () -> U256, 11, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(RequestUnbond (shares: U256) -> super::Result<super::Unbond, super::PoolError, >, 12, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Resume () -> super::Result<bool, super::PoolError, >, 13, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(RevokeSession () -> bool, 14, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Session (owner: ActorId) -> super::Option<super::Session, >, 15, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(SessionOwner (key: ActorId) -> super::Option<ActorId, >, 16, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(SetConfig (instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> super::Result<bool, super::PoolError, >, 17, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Stake () -> super::Result<U256, super::PoolError, >, 18, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(TransferAdmin (to: ActorId) -> super::Result<bool, super::PoolError, >, 19, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Unbonds (account: ActorId) -> Vec<super::Unbond>, 20, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Unstake (shares: U256) -> super::Result<super::UnstakePreview, super::PoolError, >, 21, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(RescueSurplus (to: ActorId, assets: U256) -> super::Result<U256, super::PoolError, >, 13, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Resume () -> super::Result<bool, super::PoolError, >, 14, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(RevokeSession () -> bool, 15, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Session (owner: ActorId) -> super::Option<super::Session, >, 16, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(SessionOwner (key: ActorId) -> super::Option<ActorId, >, 17, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(SetConfig (instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> super::Result<bool, super::PoolError, >, 18, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Stake () -> super::Result<U256, super::PoolError, >, 19, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(TransferAdmin (to: ActorId) -> super::Result<bool, super::PoolError, >, 20, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Unbonds (account: ActorId) -> Vec<super::Unbond>, 21, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Unstake (shares: U256) -> super::Result<super::UnstakePreview, super::PoolError, >, 22, <super::PoolImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -645,6 +658,8 @@ pub mod pool {
                 rate: U256,
             },
             #[codec(index = 11)]
+            SurplusRescued { to: ActorId, assets: U256 },
+            #[codec(index = 12)]
             UnbondRequested {
                 owner: ActorId,
                 id: u64,
@@ -652,7 +667,7 @@ pub mod pool {
                 assets: U256,
                 claimable_at: u64,
             },
-            #[codec(index = 12)]
+            #[codec(index = 13)]
             Unstaked {
                 owner: ActorId,
                 shares: U256,
@@ -676,8 +691,9 @@ pub mod pool {
                     Self::SessionProposed { .. } => 8,
                     Self::SessionRevoked { .. } => 9,
                     Self::Staked { .. } => 10,
-                    Self::UnbondRequested { .. } => 11,
-                    Self::Unstaked { .. } => 12,
+                    Self::SurplusRescued { .. } => 11,
+                    Self::UnbondRequested { .. } => 12,
+                    Self::Unstaked { .. } => 13,
                 }
             }
         }

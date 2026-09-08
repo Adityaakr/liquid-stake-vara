@@ -10,7 +10,9 @@
 //! minus rewards that are still vesting. Rewards sent through `fund_rewards` vest linearly over
 //! the vesting period, so a holder earns exactly the slice of every reward that vested while
 //! they held shares: entering and leaving in the same block earns nothing, and the instant
-//! exit fee makes the round trip a loss.
+//! exit fee makes the round trip a loss. Pricing carries a virtual share and asset offset
+//! (OpenZeppelin's ERC-4626 defence), so nobody can inflate the price per share by emptying
+//! the pool and donating.
 //!
 //! Everything here is synchronous: value moves with the message itself, so there are no
 //! cross-program calls and no partial states to compensate.
@@ -26,9 +28,20 @@ const VFT_ROUTE_IDX: u8 = 1;
 pub const SCALE: U256 = U256([1_000_000_000_000_000_000u64, 0, 0, 0]);
 pub const BPS: u64 = 10_000;
 pub const YEAR_SECS: u64 = 31_536_000;
-/// Smallest stake: 0.01 VARA (12 decimals), so share rounding can never produce zero.
-pub const MIN_STAKE: u128 = 10_000_000_000;
+/// Smallest payout: 1 VARA (12 decimals). Vara's existential deposit is 1 VARA and a value
+/// transfer that would leave the recipient below it is dropped, so no payout may be smaller.
+pub const MIN_PAYOUT: u128 = 1_000_000_000_000;
+/// Smallest stake: 2 VARA, so a whole position always clears the payout floor even after the
+/// instant fee and rounding.
+pub const MIN_STAKE: u128 = 2_000_000_000_000;
+/// VARA the pool keeps on its own account, outside the reserve, to pay for its messages.
+pub const KEEP_VARA: u128 = 1_000_000_000_000;
 pub const MAX_FEE_BPS: u32 = 1_000; // 10%
+/// Unbonds mature within a year at most.
+pub const MAX_UNBOND_SECS: u64 = 365 * 86_400;
+/// Virtual shares priced at `base_rate`, added to every quote (ERC-4626 decimals offset): a
+/// donation must be a million times the victim's rounding loss to pay off.
+pub const VIRTUAL_SHARES: U256 = U256([1_000_000, 0, 0, 0]);
 /// Rewards vest over at least an hour (so one block releases a negligible slice) and at most a year.
 pub const MIN_VESTING_SECS: u64 = 3_600;
 pub const MAX_VESTING_SECS: u64 = 365 * 86_400;
@@ -196,8 +209,8 @@ impl PoolState {
             allowances: BTreeMap::new(),
             // A pool that starts at a rate above 1.0 continues where an earlier pool left off.
             base_rate: if initial_rate < SCALE { SCALE } else { initial_rate },
-            instant_fee_bps,
-            unbond_period_ms: unbond_period_secs.saturating_mul(1000),
+            instant_fee_bps: instant_fee_bps.min(MAX_FEE_BPS),
+            unbond_period_ms: unbond_period_secs.min(MAX_UNBOND_SECS).saturating_mul(1000),
             vesting_period_ms: vesting_period_secs.clamp(MIN_VESTING_SECS, MAX_VESTING_SECS).saturating_mul(1000),
             reserve: U256::zero(),
             fees_accrued: U256::zero(),
@@ -230,31 +243,34 @@ impl PoolState {
         self.reserve.saturating_sub(self.fees_accrued).saturating_sub(self.unbonding_total).saturating_sub(self.locked_rewards(now_ms))
     }
 
-    /// True while the pool has no shares (or nothing distributable) and prices at `base_rate`.
-    fn empty(&self, now_ms: u64) -> bool {
-        self.total_shares.is_zero() || self.distributable(now_ms).is_zero()
+    /// The quote basis: distributable VARA plus the virtual assets, over shares plus the virtual
+    /// shares. The virtual pair is priced at `base_rate`, so an empty pool quotes exactly
+    /// `base_rate` and a full one is nudged towards it by a millionth of a share.
+    fn basis(&self, now_ms: u64) -> (U256, U256) {
+        // Rounded up so an empty pool never quotes below `base_rate`.
+        let virtual_assets = (VIRTUAL_SHARES.saturating_mul(self.base_rate) + SCALE - U256::one()) / SCALE;
+        // With no shares outstanding whatever is distributable belongs to nobody and is swept
+        // on the next stake, so it does not price anything.
+        let assets = if self.total_shares.is_zero() { U256::zero() } else { self.distributable(now_ms) };
+        (assets.saturating_add(virtual_assets), self.total_shares.saturating_add(VIRTUAL_SHARES))
     }
 
     /// VARA per kVARA scaled by 1e18 at `now_ms`.
     pub fn rate_at(&self, now_ms: u64) -> U256 {
-        if self.empty(now_ms) { return self.base_rate; }
-        self.distributable(now_ms).saturating_mul(SCALE) / self.total_shares
+        let (assets, shares) = self.basis(now_ms);
+        assets.saturating_mul(SCALE) / shares
     }
 
     /// Shares minted for `assets` at `now_ms` (rounded down, in the pool's favour).
     pub fn shares_for(&self, assets: U256, now_ms: u64) -> Result<U256, PoolError> {
-        if self.empty(now_ms) {
-            return assets.checked_mul(SCALE).ok_or(PoolError::Overflow).map(|v| v / self.base_rate);
-        }
-        assets.checked_mul(self.total_shares).ok_or(PoolError::Overflow).map(|v| v / self.distributable(now_ms))
+        let (a, s) = self.basis(now_ms);
+        assets.checked_mul(s).ok_or(PoolError::Overflow).map(|v| v / a)
     }
 
     /// VARA owed for `shares` at `now_ms` (rounded down, in the pool's favour).
     pub fn assets_for(&self, shares: U256, now_ms: u64) -> Result<U256, PoolError> {
-        if self.empty(now_ms) {
-            return shares.checked_mul(self.base_rate).ok_or(PoolError::Overflow).map(|v| v / SCALE);
-        }
-        shares.checked_mul(self.distributable(now_ms)).ok_or(PoolError::Overflow).map(|v| v / self.total_shares)
+        let (a, s) = self.basis(now_ms);
+        shares.checked_mul(a).ok_or(PoolError::Overflow).map(|v| v / s)
     }
 
     pub fn total_assets(&self, now_ms: u64) -> U256 {
@@ -338,7 +354,7 @@ impl PoolState {
         let rate_before = self.rate_at(now_ms);
         self.debit(from, value).map_err(|_| PoolError::InsufficientShares)?;
         self.total_shares = self.total_shares.checked_sub(value).ok_or(PoolError::Overflow)?;
-        if self.total_shares.is_zero() { self.base_rate = rate_before; }
+        if self.total_shares.is_zero() && rate_before >= SCALE { self.base_rate = rate_before; }
         Ok(())
     }
 
@@ -358,9 +374,10 @@ impl PoolState {
         self.ensure_live()?;
         if assets.is_zero() { return Err(PoolError::ZeroAmount); }
         if assets < U256::from(MIN_STAKE) { return Err(PoolError::BelowMinimum { min: U256::from(MIN_STAKE) }); }
-        self.sweep_orphans(now_ms);
+        // Nothing is written until every check has passed (the sweep is a write).
         let shares = self.shares_for(assets, now_ms)?;
         if shares.is_zero() { return Err(PoolError::BelowMinimum { min: U256::from(MIN_STAKE) }); }
+        self.sweep_orphans(now_ms);
         self.mint_shares(owner, shares)?;
         self.reserve = self.reserve.checked_add(assets).ok_or(PoolError::Overflow)?;
         Ok(shares)
@@ -373,7 +390,7 @@ impl PoolState {
         if shares.is_zero() { return Err(PoolError::ZeroAmount); }
         if self.balance_of(&owner) < shares { return Err(PoolError::InsufficientShares); }
         let p = self.preview_unstake(shares, now_ms)?;
-        if p.net.is_zero() { return Err(PoolError::ZeroAmount); }
+        if p.net < U256::from(MIN_PAYOUT) { return Err(PoolError::BelowMinimum { min: U256::from(MIN_PAYOUT) }); }
         let available = self.distributable(now_ms);
         if p.assets > available { return Err(PoolError::InsufficientReserve { available }); }
         self.burn_shares(owner, shares, now_ms)?;
@@ -394,6 +411,7 @@ impl PoolState {
     /// the time left and a full vesting period (Yearn v3 style): dust cannot stretch a running
     /// tranche, and a new tranche after a finished one gets a full period.
     pub fn fund(&mut self, assets: U256, now_ms: u64) -> Result<(), PoolError> {
+        self.ensure_live()?;
         if assets.is_zero() { return Err(PoolError::ZeroAmount); }
         let remaining = self.locked_rewards(now_ms);
         let period = U256::from(self.vesting_period_ms);
@@ -417,7 +435,7 @@ impl PoolState {
         if shares.is_zero() { return Err(PoolError::ZeroAmount); }
         if self.balance_of(&owner) < shares { return Err(PoolError::InsufficientShares); }
         let assets = self.assets_for(shares, now_ms)?;
-        if assets.is_zero() { return Err(PoolError::ZeroAmount); }
+        if assets < U256::from(MIN_PAYOUT) { return Err(PoolError::BelowMinimum { min: U256::from(MIN_PAYOUT) }); }
         let available = self.distributable(now_ms);
         if assets > available { return Err(PoolError::InsufficientReserve { available }); }
         self.burn_shares(owner, shares, now_ms)?;
@@ -461,7 +479,7 @@ impl PoolState {
     }
 
     pub fn set_config(&mut self, instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> Result<(), PoolError> {
-        if instant_fee_bps > MAX_FEE_BPS || !(MIN_VESTING_SECS..=MAX_VESTING_SECS).contains(&vesting_period_secs) { return Err(PoolError::BadConfig); }
+        if instant_fee_bps > MAX_FEE_BPS || unbond_period_secs > MAX_UNBOND_SECS || !(MIN_VESTING_SECS..=MAX_VESTING_SECS).contains(&vesting_period_secs) { return Err(PoolError::BadConfig); }
         self.instant_fee_bps = instant_fee_bps;
         self.unbond_period_ms = unbond_period_secs.saturating_mul(1000);
         self.vesting_period_ms = vesting_period_secs.saturating_mul(1000);
@@ -470,11 +488,12 @@ impl PoolState {
 
     // --- sessions ------------------------------------------------------------
 
-    /// Who a message acts for: the sender itself, or the owner of the accepted session key it holds.
+    /// Who a message acts for: the sender itself, or the owner of the accepted session key it
+    /// holds. An expired session no longer binds the key: it is a plain account again.
     pub fn actor_for(&self, sender: ActorId, action: SessionAction, now_ms: u64) -> Result<ActorId, PoolError> {
         let Some(owner) = self.session_keys.get(&sender) else { return Ok(sender) };
-        let session = self.sessions.get(owner).ok_or(PoolError::SessionExpired)?;
-        if now_ms >= session.expires_at { return Err(PoolError::SessionExpired); }
+        let Some(session) = self.sessions.get(owner) else { return Ok(sender) };
+        if now_ms >= session.expires_at { return Ok(sender); }
         if !session.actions.contains(&action) { return Err(PoolError::SessionNotAllowed); }
         Ok(*owner)
     }
@@ -483,10 +502,18 @@ impl PoolState {
     pub fn propose_session(&mut self, owner: ActorId, key: ActorId, duration_secs: u64, actions: Vec<SessionAction>, now_ms: u64) -> Result<Session, PoolError> {
         if key.is_zero() || key == owner || duration_secs == 0 || duration_secs > MAX_SESSION_SECS || actions.is_empty() { return Err(PoolError::BadSession); }
         // A key may serve one owner.
-        if let Some(other) = self.session_keys.get(&key) { if *other != owner { return Err(PoolError::BadSession); } }
+        if self.key_bound_elsewhere(key, owner, now_ms) { return Err(PoolError::BadSession); }
         let session = Session { key, expires_at: now_ms.saturating_add(duration_secs.saturating_mul(1000)), actions };
         self.pending_sessions.insert(owner, session.clone());
         Ok(session)
+    }
+
+    /// True when `key` is held by a live session of another owner.
+    fn key_bound_elsewhere(&self, key: ActorId, owner: ActorId, now_ms: u64) -> bool {
+        match self.session_keys.get(&key) {
+            Some(other) if *other != owner => self.sessions.get(other).is_some_and(|s| now_ms < s.expires_at),
+            _ => false,
+        }
     }
 
     /// The key accepts the session `owner` proposed for it; from now on it acts for `owner`.
@@ -494,9 +521,11 @@ impl PoolState {
     pub fn accept_session(&mut self, key: ActorId, owner: ActorId, now_ms: u64) -> Result<Session, PoolError> {
         let proposed = self.pending_sessions.get(&owner).filter(|s| s.key == key).ok_or(PoolError::BadSession)?;
         if now_ms >= proposed.expires_at { return Err(PoolError::SessionExpired); }
-        if let Some(other) = self.session_keys.get(&key) { if *other != owner { return Err(PoolError::BadSession); } }
+        if self.key_bound_elsewhere(key, owner, now_ms) { return Err(PoolError::BadSession); }
         let session = self.pending_sessions.remove(&owner).ok_or(PoolError::BadSession)?;
         if let Some(old) = self.sessions.remove(&owner) { self.session_keys.remove(&old.key); }
+        // An expired binding of this key to somebody else is dead; free it.
+        if let Some(other) = self.session_keys.get(&key).copied() { if other != owner { self.sessions.remove(&other); self.session_keys.remove(&key); } }
         self.sessions.insert(owner, session.clone());
         self.session_keys.insert(key, owner);
         Ok(session)
@@ -644,6 +673,7 @@ pub enum PoolEvent {
     SessionProposed { owner: ActorId, key: ActorId, expires_at: u64 },
     SessionRevoked { owner: ActorId },
     Staked { owner: ActorId, assets: U256, shares: U256, rate: U256 },
+    SurplusRescued { to: ActorId, assets: U256 },
     UnbondRequested { owner: ActorId, id: u64, shares: U256, assets: U256, claimable_at: u64 },
     Unstaked { owner: ActorId, shares: U256, assets: U256, fee: U256, rate: U256 },
 }
@@ -673,6 +703,13 @@ fn pay_out(to: ActorId, assets: U256) -> Result<(), PoolError> {
     sails_rs::gstd::msg::send_bytes_with_gas(to, [], 0, as_value(assets)).map(|_| ()).map_err(|e| PoolError::TransferFailed(format!("{e:?}")))
 }
 
+/// Reply to a command that does not take value: whatever VARA came with the message goes back
+/// with the reply instead of sitting on the program outside the reserve.
+fn no_value<T>(reply: T) -> CommandReply<T> {
+    let value = Syscall::message_value();
+    if value > 0 { CommandReply::new(reply).with_value(value) } else { CommandReply::new(reply) }
+}
+
 #[sails_rs::service(events = PoolEvent)]
 impl Pool<'_> {
     // Stake the VARA attached to the message. Returns the kVARA minted. On any error the
@@ -698,7 +735,11 @@ impl Pool<'_> {
 
     // Instant exit: burn `shares`, receive VARA at the current rate minus the instant fee.
     #[export]
-    pub fn unstake(&mut self, shares: U256) -> Result<UnstakePreview, PoolError> {
+    pub fn unstake(&mut self, shares: U256) -> CommandReply<Result<UnstakePreview, PoolError>> {
+        no_value(self.do_unstake(shares))
+    }
+
+    fn do_unstake(&mut self, shares: U256) -> Result<UnstakePreview, PoolError> {
         let (owner, preview, rate) = {
             let mut s = self.state.borrow_mut();
             let now = now_ms();
@@ -722,7 +763,11 @@ impl Pool<'_> {
 
     // Timed exit: burn `shares` now, lock VARA at the current rate, claim after the unbond period.
     #[export]
-    pub fn request_unbond(&mut self, shares: U256) -> Result<Unbond, PoolError> {
+    pub fn request_unbond(&mut self, shares: U256) -> CommandReply<Result<Unbond, PoolError>> {
+        no_value(self.do_request_unbond(shares))
+    }
+
+    fn do_request_unbond(&mut self, shares: U256) -> Result<Unbond, PoolError> {
         let (owner, entry) = {
             let mut s = self.state.borrow_mut();
             let now = now_ms();
@@ -736,7 +781,11 @@ impl Pool<'_> {
 
     // Claim a matured unbond entry. Returns the VARA paid.
     #[export]
-    pub fn claim(&mut self, id: u64) -> Result<U256, PoolError> {
+    pub fn claim(&mut self, id: u64) -> CommandReply<Result<U256, PoolError>> {
+        no_value(self.do_claim(id))
+    }
+
+    fn do_claim(&mut self, id: u64) -> Result<U256, PoolError> {
         let (owner, entry) = {
             let mut s = self.state.borrow_mut();
             let now = now_ms();
@@ -778,7 +827,11 @@ impl Pool<'_> {
     // --- admin ---------------------------------------------------------------
 
     #[export]
-    pub fn set_config(&mut self, instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> Result<bool, PoolError> {
+    pub fn set_config(&mut self, instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> CommandReply<Result<bool, PoolError>> {
+        no_value(self.do_set_config(instant_fee_bps, unbond_period_secs, vesting_period_secs))
+    }
+
+    fn do_set_config(&mut self, instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> Result<bool, PoolError> {
         let caller = Syscall::message_source();
         {
             let mut s = self.state.borrow_mut();
@@ -790,7 +843,11 @@ impl Pool<'_> {
     }
 
     #[export]
-    pub fn pause(&mut self) -> Result<bool, PoolError> {
+    pub fn pause(&mut self) -> CommandReply<Result<bool, PoolError>> {
+        no_value(self.do_pause())
+    }
+
+    fn do_pause(&mut self) -> Result<bool, PoolError> {
         let caller = Syscall::message_source();
         {
             let mut s = self.state.borrow_mut();
@@ -802,7 +859,11 @@ impl Pool<'_> {
     }
 
     #[export]
-    pub fn resume(&mut self) -> Result<bool, PoolError> {
+    pub fn resume(&mut self) -> CommandReply<Result<bool, PoolError>> {
+        no_value(self.do_resume())
+    }
+
+    fn do_resume(&mut self) -> Result<bool, PoolError> {
         let caller = Syscall::message_source();
         {
             let mut s = self.state.borrow_mut();
@@ -814,7 +875,11 @@ impl Pool<'_> {
     }
 
     #[export]
-    pub fn transfer_admin(&mut self, to: ActorId) -> Result<bool, PoolError> {
+    pub fn transfer_admin(&mut self, to: ActorId) -> CommandReply<Result<bool, PoolError>> {
+        no_value(self.do_transfer_admin(to))
+    }
+
+    fn do_transfer_admin(&mut self, to: ActorId) -> Result<bool, PoolError> {
         let caller = Syscall::message_source();
         {
             let mut s = self.state.borrow_mut();
@@ -828,7 +893,11 @@ impl Pool<'_> {
 
     // Send accrued instant-exit fees (and swept orphans) to `to`. Fees are paid from the reserve.
     #[export]
-    pub fn collect_fees(&mut self, to: ActorId) -> Result<U256, PoolError> {
+    pub fn collect_fees(&mut self, to: ActorId) -> CommandReply<Result<U256, PoolError>> {
+        no_value(self.do_collect_fees(to))
+    }
+
+    fn do_collect_fees(&mut self, to: ActorId) -> Result<U256, PoolError> {
         let caller = Syscall::message_source();
         let amount = {
             let mut s = self.state.borrow_mut();
@@ -855,12 +924,41 @@ impl Pool<'_> {
         }
     }
 
+    // Send VARA that sits on the program outside the reserve (value attached to commands that
+    // take none, payouts bounced by a program recipient) to `to`. The reserve, the
+    // rewards tranche and a keep-alive buffer are never touched.
+    #[export]
+    pub fn rescue_surplus(&mut self, to: ActorId, assets: U256) -> CommandReply<Result<U256, PoolError>> {
+        no_value(self.do_rescue_surplus(to, assets))
+    }
+
+    fn do_rescue_surplus(&mut self, to: ActorId, assets: U256) -> Result<U256, PoolError> {
+        let caller = Syscall::message_source();
+        let available = {
+            let s = self.state.borrow();
+            s.ensure_admin(caller)?;
+            if to.is_zero() { return Err(PoolError::ZeroAddress); }
+            if assets.is_zero() { return Err(PoolError::ZeroAmount); }
+            // The value attached to this very message is part of the balance but goes back with the reply.
+            let free = U256::from(Syscall::value_available()).saturating_sub(U256::from(Syscall::message_value()));
+            free.saturating_sub(s.reserve).saturating_sub(U256::from(KEEP_VARA))
+        };
+        if assets > available { return Err(PoolError::InsufficientReserve { available }); }
+        pay_out(to, assets)?;
+        self.emit_event(PoolEvent::SurplusRescued { to, assets }).expect("event");
+        Ok(assets)
+    }
+
     // --- sessions --------------------------------------------------------------
 
     // Propose `key` to act for the caller for `duration_secs` (max 30 days), limited to
     // `actions`. Takes effect once the key calls `accept_session`.
     #[export]
-    pub fn create_session(&mut self, key: ActorId, duration_secs: u64, actions: Vec<SessionAction>) -> Result<Session, PoolError> {
+    pub fn create_session(&mut self, key: ActorId, duration_secs: u64, actions: Vec<SessionAction>) -> CommandReply<Result<Session, PoolError>> {
+        no_value(self.do_create_session(key, duration_secs, actions))
+    }
+
+    fn do_create_session(&mut self, key: ActorId, duration_secs: u64, actions: Vec<SessionAction>) -> Result<Session, PoolError> {
         let owner = Syscall::message_source();
         let session = self.state.borrow_mut().propose_session(owner, key, duration_secs, actions, now_ms())?;
         self.emit_event(PoolEvent::SessionProposed { owner, key, expires_at: session.expires_at }).expect("event");
@@ -870,7 +968,11 @@ impl Pool<'_> {
     // Sent by the key: accept the session `owner` proposed for it. Replaces the owner's
     // previous session, if any.
     #[export]
-    pub fn accept_session(&mut self, owner: ActorId) -> Result<Session, PoolError> {
+    pub fn accept_session(&mut self, owner: ActorId) -> CommandReply<Result<Session, PoolError>> {
+        no_value(self.do_accept_session(owner))
+    }
+
+    fn do_accept_session(&mut self, owner: ActorId) -> Result<Session, PoolError> {
         let key = Syscall::message_source();
         let session = self.state.borrow_mut().accept_session(key, owner, now_ms())?;
         self.emit_event(PoolEvent::SessionAccepted { owner, key, expires_at: session.expires_at }).expect("event");
@@ -879,11 +981,11 @@ impl Pool<'_> {
 
     // Drop the caller's session (active or proposed). Returns whether one existed.
     #[export]
-    pub fn revoke_session(&mut self) -> bool {
+    pub fn revoke_session(&mut self) -> CommandReply<bool> {
         let owner = Syscall::message_source();
         let had = self.state.borrow_mut().revoke_session(owner);
         if had { self.emit_event(PoolEvent::SessionRevoked { owner }).expect("event"); }
-        had
+        no_value(had)
     }
 
     #[export]
@@ -980,6 +1082,12 @@ mod tests {
     const DAY: u64 = 86_400 * 1000;
     const WEEK_SECS: u64 = 7 * 86_400;
 
+    /// Equal up to the virtual offset's dilution (a millionth) plus one unit of rounding.
+    fn near(a: U256, b: U256) -> bool {
+        let d = if a > b { a - b } else { b - a };
+        d <= b / U256::from(1_000_000u64) + U256::one()
+    }
+
     fn pool(fee_bps: u32) -> PoolState {
         PoolState::new(a(1), "Vale kVARA".into(), "kVARA".into(), 12, fee_bps, WEEK_SECS, WEEK_SECS, U256::zero())
     }
@@ -1001,9 +1109,9 @@ mod tests {
         p.fund(u(7 * ONE), T0).unwrap(); // 1 VARA per day for a week
         assert_eq!(p.rate_at(T0), SCALE, "nothing vested yet");
         assert_eq!(p.locked_rewards(T0), u(7 * ONE));
-        assert_eq!(p.rate_at(T0 + DAY), SCALE + SCALE / 100, "1% after a day");
-        assert_eq!(p.rate_at(T0 + 7 * DAY), SCALE + SCALE * 7 / 100, "7% when fully vested");
-        assert_eq!(p.rate_at(T0 + 30 * DAY), SCALE + SCALE * 7 / 100, "and no further");
+        assert!(near(p.rate_at(T0 + DAY), SCALE + SCALE / 100), "1% after a day: {}", p.rate_at(T0 + DAY));
+        assert!(near(p.rate_at(T0 + 7 * DAY), SCALE + SCALE * 7 / 100), "7% when fully vested");
+        assert_eq!(p.rate_at(T0 + 30 * DAY), p.rate_at(T0 + 7 * DAY), "and no further");
         assert_eq!(p.locked_rewards(T0 + 7 * DAY), U256::zero());
         // The annualised rate of the drip over the distributable amount.
         assert_eq!(p.apy_bps(T0), (365 * 100) as u32);
@@ -1036,13 +1144,13 @@ mod tests {
         p.stake(a(2), u(100 * ONE), T0).unwrap();
         p.fund(u(35 * ONE), T0).unwrap();
         let t = T0 + 7 * DAY;
-        assert_eq!(p.stake(a(3), u(135 * ONE), t).unwrap(), u(100 * ONE));
-        assert_eq!(p.assets_for(u(100 * ONE), t).unwrap(), u(135 * ONE));
+        assert!(near(p.stake(a(3), u(135 * ONE), t).unwrap(), u(100 * ONE)));
+        assert!(near(p.assets_for(u(100 * ONE), t).unwrap(), u(135 * ONE)));
         // A later tranche is split by shares, not by who was there first.
         p.fund(u(27 * ONE), t).unwrap();
         let t2 = t + 7 * DAY;
-        assert_eq!(p.assets_for(p.balance_of(&a(2)), t2).unwrap(), u(148_500_000_000_000));
-        assert_eq!(p.assets_for(p.balance_of(&a(3)), t2).unwrap(), u(148_500_000_000_000));
+        assert!(near(p.assets_for(p.balance_of(&a(2)), t2).unwrap(), u(148_500_000_000_000)));
+        assert!(near(p.assets_for(p.balance_of(&a(3)), t2).unwrap(), u(148_500_000_000_000)));
     }
 
     #[test]
@@ -1081,17 +1189,17 @@ mod tests {
         p.stake(a(2), u(100 * ONE), T0).unwrap();
         p.fund(u(7 * ONE), T0).unwrap();
         let t = T0 + 7 * DAY;
-        assert_eq!(p.rate_at(t), SCALE + SCALE * 7 / 100);
+        assert!(near(p.rate_at(t), SCALE + SCALE * 7 / 100));
         // A tranche is still vesting when the last holder leaves.
         p.fund(u(70 * ONE), t).unwrap();
         p.unstake(a(2), u(100 * ONE), t).unwrap();
         assert_eq!(p.total_shares, U256::zero());
-        assert_eq!(p.rate_at(t), SCALE + SCALE * 7 / 100, "the rate survives the empty spell");
+        assert!(near(p.rate_at(t), SCALE + SCALE * 7 / 100), "the rate survives the empty spell");
         // Half the tranche vested with nobody holding: it is swept, not handed to the next staker.
         let t2 = t + 7 * DAY / 2;
         let shares = p.stake(a(3), u(MIN_STAKE), t2).unwrap();
-        assert_eq!(p.fees_accrued, u(35 * ONE));
-        assert_eq!(p.assets_for(shares, t2).unwrap(), u(MIN_STAKE), "the new holder owns exactly their stake");
+        assert!(near(p.fees_accrued, u(35 * ONE)), "swept {}", p.fees_accrued);
+        assert!(near(p.assets_for(shares, t2).unwrap(), u(MIN_STAKE)), "the new holder owns their stake");
         assert!(p.assets_for(shares, t2 + 7 * DAY).unwrap() > u(30 * ONE), "the rest vests to the new holder");
     }
 
@@ -1150,7 +1258,7 @@ mod tests {
         p.request_unbond(a(2), u(100 * ONE), T0).unwrap();
         p.fund(u(10 * ONE), T0).unwrap();
         let t = T0 + 7 * DAY;
-        assert_eq!(p.assets_for(u(100 * ONE), t).unwrap(), u(110 * ONE), "the stayer gets the whole tranche");
+        assert!(near(p.assets_for(u(100 * ONE), t).unwrap(), u(110 * ONE)), "the stayer gets the whole tranche");
         assert_eq!(p.unbonds_of(&a(2))[0].assets, u(100 * ONE));
     }
 
@@ -1200,9 +1308,16 @@ mod tests {
         p.accept_session(a(9), a(2), T0 + 1).unwrap();
         assert_eq!(p.actor_for(a(9), SessionAction::Unstake, T0 + 1).unwrap(), a(2));
         assert_eq!(p.actor_for(a(9), SessionAction::Claim, T0 + 1), Err(PoolError::SessionNotAllowed));
-        assert_eq!(p.actor_for(a(9), SessionAction::Unstake, T0 + 60_000), Err(PoolError::SessionExpired));
-        // Another owner cannot take an accepted key.
+        assert_eq!(p.actor_for(a(9), SessionAction::Unstake, T0 + 60_000).unwrap(), a(9), "an expired session frees the key");
+        // Another owner cannot take a live key, but can take an expired one.
         assert_eq!(p.propose_session(a(3), a(9), 60, all.clone(), T0), Err(PoolError::BadSession));
+        assert!(p.propose_session(a(3), a(9), 60, all.clone(), T0 + 60_000).is_ok());
+        assert!(p.accept_session(a(9), a(3), T0 + 60_001).is_ok());
+        assert_eq!(p.actor_for(a(9), SessionAction::Claim, T0 + 60_002).unwrap(), a(3));
+        assert!(p.sessions.get(&a(2)).is_none(), "the dead binding was cleared");
+        assert!(p.revoke_session(a(3)));
+        p.propose_session(a(2), a(9), 60, vec![SessionAction::Unstake], T0 + 70_000).unwrap();
+        p.accept_session(a(9), a(2), T0 + 70_000).unwrap();
         assert!(p.revoke_session(a(2)));
         assert!(!p.revoke_session(a(2)));
         assert_eq!(p.actor_for(a(9), SessionAction::Unstake, T0 + 1).unwrap(), a(9));
@@ -1223,12 +1338,62 @@ mod tests {
     }
 
     #[test]
+    fn a_donation_cannot_inflate_the_price_per_share() {
+        // ERC-4626 inflation: drive the supply down to one share, donate, and let the next
+        // staker's deposit round against them. The virtual offset makes it a loss for the attacker.
+        let mut p = pool(0);
+        p.stake(a(2), u(2 * ONE), T0).unwrap();
+        let all = p.balance_of(&a(2));
+        p.unstake(a(2), all - U256::one(), T0).unwrap_or_else(|e| panic!("leave one share: {e:?}"));
+        p.fund(u(1_000 * ONE), T0).unwrap();
+        let t = T0 + 7 * DAY;
+        // The price per share does rise, but a million virtual shares hold the resolution: the
+        // victim's rounding loss is one share's worth, and the attacker's one share owns almost none
+        // of the donation.
+        let victim = p.stake(a(3), u(1_999 * ONE), t).unwrap();
+        let back = p.assets_for(victim, t).unwrap();
+        let one_share = p.rate_at(t) / SCALE;
+        assert!(back + one_share + U256::one() >= u(1_999 * ONE), "the victim loses at most one share of rounding: {back}");
+        let attacker = p.assets_for(p.balance_of(&a(2)), t).unwrap();
+        assert!(attacker < u(ONE), "the donation went to the pool, not back to the attacker: {attacker}");
+    }
+
+    #[test]
+    fn payouts_below_one_vara_are_refused_but_a_whole_position_always_exits() {
+        let mut p = pool(MAX_FEE_BPS);
+        assert_eq!(p.stake(a(2), u(MIN_STAKE - 1), T0), Err(PoolError::BelowMinimum { min: u(MIN_STAKE) }));
+        p.stake(a(2), u(MIN_STAKE), T0).unwrap();
+        let all = p.balance_of(&a(2));
+        assert_eq!(p.unstake(a(2), all / U256::from(2u64), T0), Err(PoolError::BelowMinimum { min: u(MIN_PAYOUT) }), "half of it minus the fee is below the payout floor");
+        assert_eq!(p.request_unbond(a(2), all / U256::from(4u64), T0), Err(PoolError::BelowMinimum { min: u(MIN_PAYOUT) }));
+        let out = p.unstake(a(2), all, T0).unwrap();
+        assert!(out.net >= u(MIN_PAYOUT), "even at the maximum fee a minimum stake exits whole: {}", out.net);
+        p.stake(a(3), u(MIN_STAKE), T0).unwrap();
+        assert!(p.request_unbond(a(3), p.balance_of(&a(3)), T0).is_ok(), "and unbonds whole");
+    }
+
+    #[test]
+    fn constructor_bounds_the_config() {
+        let p = PoolState::new(a(1), "k".into(), "kVARA".into(), 12, 20_000, 10 * 365 * 86_400, 1, U256::zero());
+        assert_eq!((p.instant_fee_bps, p.unbond_period_ms, p.vesting_period_ms), (MAX_FEE_BPS, MAX_UNBOND_SECS * 1000, MIN_VESTING_SECS * 1000));
+        let mut q = pool(0);
+        assert_eq!(q.set_config(30, MAX_UNBOND_SECS + 1, 3_600), Err(PoolError::BadConfig));
+    }
+
+    #[test]
+    fn funding_is_frozen_while_paused() {
+        let mut p = pool(0);
+        p.paused = true;
+        assert_eq!(p.fund(u(ONE), T0), Err(PoolError::Paused));
+    }
+
+    #[test]
     fn info_reports_the_vesting_state() {
         let mut p = pool(30);
         p.stake(a(2), u(100 * ONE), T0).unwrap();
         p.fund(u(7 * ONE), T0).unwrap();
         let i = p.info(T0 + DAY);
-        assert_eq!(i.rate, SCALE + SCALE / 100);
+        assert!(near(i.rate, SCALE + SCALE / 100));
         assert_eq!(i.total_assets, u(101 * ONE));
         assert_eq!(i.reserve, u(107 * ONE));
         assert_eq!(i.distributable, u(101 * ONE));

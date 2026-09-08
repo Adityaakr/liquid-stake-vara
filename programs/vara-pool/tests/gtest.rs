@@ -177,13 +177,14 @@ async fn rewards_vest_linearly_and_are_paid_on_exit() {
 
     w.skip_secs(VESTING_SECS);
     let info = w.pool.pool().info().await.unwrap();
-    assert_eq!(info.rate, U256::from(SCALE + SCALE / 10), "fully vested: 1.10");
+    let full = U256::from(SCALE + SCALE / 10);
+    assert!(info.rate <= full && info.rate + U256::from(SCALE / 1_000_000) >= full, "fully vested: 1.10 up to the virtual offset, got {}", info.rate);
     assert_eq!(info.locked_rewards, U256::zero());
     assert_eq!((info.apy_bps, info.vesting_ends_at), (0, 0), "no tranche left");
 
     let bob_before = w.vara(BOB);
     let out = w.pool_as(BOB).pool().unstake(u(100 * ONE)).await.unwrap().unwrap();
-    assert_eq!(out.assets, u(110 * ONE), "principal plus the whole tranche");
+    assert!(out.assets <= u(110 * ONE) && out.assets + u(ONE / 1_000) >= u(110 * ONE), "principal plus the whole tranche up to the virtual offset: {}", out.assets);
     assert!(w.vara(BOB) > bob_before + 109 * ONE, "bob got principal plus yield");
     let info = w.pool.pool().info().await.unwrap();
     assert_eq!(info.reserve, u(110 * ONE) - out.net);
@@ -324,6 +325,34 @@ async fn proposing_a_stranger_as_key_cannot_capture_their_stake() {
     assert_eq!(out.assets, u(100 * ONE));
     // And the stranger accepting nothing means the proposal stays inert; Charlie can drop it.
     assert!(w.pool_as(CHARLIE).pool().revoke_session().await.unwrap());
+}
+
+#[tokio::test]
+async fn value_attached_to_a_plain_command_comes_back_and_surplus_can_be_rescued() {
+    let w = setup().await;
+    w.pool_as(BOB).pool().stake().with_value(100 * ONE).await.unwrap().unwrap();
+    // A command that takes no value returns whatever came with it.
+    let bob_before = w.vara(BOB);
+    let had = w.pool_as(BOB).pool().revoke_session().with_value(5 * ONE).await.unwrap();
+    assert!(!had);
+    assert!(bob_before - w.vara(BOB) < ONE, "the 5 VARA came back, only gas was spent: {}", bob_before - w.vara(BOB));
+    let info = w.pool.pool().info().await.unwrap();
+    assert_eq!(info.reserve, u(100 * ONE), "nothing leaked into the reserve");
+
+    // VARA that lands on the program outside its books (a plain transfer here) is admin-rescuable,
+    // but never the reserve or the keep-alive buffer.
+    w.env.system().transfer(ALICE, w.pool.id(), 7 * ONE, true);
+    let too_much = w.pool.pool().rescue_surplus(actor(CHARLIE), u(200 * ONE)).await.unwrap();
+    assert!(matches!(too_much, Err(pool::PoolError::InsufficientReserve { .. })), "{too_much:?}");
+    assert_eq!(w.pool_as(BOB).pool().rescue_surplus(actor(BOB), u(ONE)).await.unwrap(), Err(pool::PoolError::Unauthorized));
+    let charlie_before = w.vara(CHARLIE);
+    let got = w.pool.pool().rescue_surplus(actor(CHARLIE), u(7 * ONE)).await.unwrap().unwrap();
+    assert_eq!(got, u(7 * ONE));
+    assert!(w.vara(CHARLIE) > charlie_before + 6 * ONE, "rescued VARA landed");
+    assert_eq!(w.pool.pool().info().await.unwrap().reserve, u(100 * ONE), "the reserve is untouched");
+    // Bob's position is intact and still pays in full.
+    let out = w.pool_as(BOB).pool().unstake(u(100 * ONE)).await.unwrap().unwrap();
+    assert_eq!(out.assets, u(100 * ONE));
 }
 
 #[tokio::test]

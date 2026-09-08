@@ -15,3 +15,4 @@ sails-rs.workspace = true
 
 [dev-dependencies]
 sails-rs = { workspace = true, features = ["std"] }
+proptest = "1"

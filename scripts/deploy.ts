@@ -35,8 +35,8 @@ const FAUCET_AMOUNT = 1_000n * ONE;
 const FAUCET_COOLDOWN_SECS = Number(args.cooldown ?? 6 * 3600);
 const INSTANT_FEE_BPS = 30;
 const UNBOND_SECS = Number(args.unbond ?? 7 * 86_400);
-/** Each rewards tranche vests linearly over this long (the programs accept an hour to a year). */
-const VESTING_SECS = Number(args.vesting ?? 7 * 86_400);
+/** Each rewards tranche vests linearly over this long; the programs clamp it to an hour .. a year, so do the same here. */
+const VESTING_SECS = Math.min(365 * 86_400, Math.max(3_600, Number(args.vesting ?? 7 * 86_400)));
 const VAULT_FUNDING_VARA = BigInt(args.fund ?? 15); // pays for the vault's outgoing messages
 /** Whole tokens the deployer deposits into each vault after deploy so the pool is not empty. */
 const SEED_TOKENS = BigInt(args.seed ?? 0);

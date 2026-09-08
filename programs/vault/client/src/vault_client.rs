@@ -109,6 +109,11 @@ pub mod vft {
         NotEnoughGas {
             required: u64,
         },
+        /// The token did not reply in time. The transfer may or may not have happened: the call is
+        /// recorded under this id and the admin settles it with `resolve_unconfirmed`.
+        Unconfirmed {
+            id: u64,
+        },
         /// The session key acting for the owner has expired.
         SessionExpired,
         /// The session key acting for the owner may not perform this action.
@@ -154,7 +159,7 @@ pub mod vft {
 
     impl sails_rs::client::Identifiable for VftImpl {
         const INTERFACE_ID: sails_rs::InterfaceId =
-            sails_rs::InterfaceId::from_bytes_8([136, 110, 133, 14, 44, 159, 49, 139]);
+            sails_rs::InterfaceId::from_bytes_8([59, 92, 102, 80, 208, 223, 199, 169]);
     }
 
     impl<E: sails_rs::client::GearEnv> Vft for sails_rs::client::Service<VftImpl, E> {
@@ -317,6 +322,23 @@ pub mod vault {
     }
     #[sails_rs::sails_type(crate = sails_rs)]
     #[derive(PartialEq, Clone, Debug)]
+    pub struct Unconfirmed {
+        pub id: u64,
+        pub owner: ActorId,
+        pub kind: UnconfirmedKind,
+        pub assets: U256,
+    }
+    /// A token call whose reply never arrived. `Deposit` and `Rewards` pulled tokens that are not
+    /// on the books; `Payout` sent tokens the books already count as paid.
+    #[sails_rs::sails_type(crate = sails_rs)]
+    #[derive(PartialEq, Clone, Debug)]
+    pub enum UnconfirmedKind {
+        Deposit,
+        Rewards,
+        Payout,
+    }
+    #[sails_rs::sails_type(crate = sails_rs)]
+    #[derive(PartialEq, Clone, Debug)]
     pub enum VaultError {
         Paused,
         ZeroAddress,
@@ -345,6 +367,11 @@ pub mod vault {
         /// The message carried less gas than the async flow needs; nothing was moved.
         NotEnoughGas {
             required: u64,
+        },
+        /// The token did not reply in time. The transfer may or may not have happened: the call is
+        /// recorded under this id and the admin settles it with `resolve_unconfirmed`.
+        Unconfirmed {
+            id: u64,
         },
         /// The session key acting for the owner has expired.
         SessionExpired,
@@ -381,9 +408,13 @@ pub mod vault {
         /// When the current tranche is fully vested (0 when nothing is vesting).
         pub vesting_ends_at: u64,
         pub fees_accrued: U256,
+        /// Fees of redeems whose payout is still in flight; collectable once it landed.
+        pub fees_pending: U256,
         pub unbonding_total: U256,
         pub min_deposit: U256,
         pub paused: bool,
+        /// Token calls waiting for the admin to settle them.
+        pub unconfirmed: u32,
     }
 
     pub trait Vault {
@@ -435,6 +466,11 @@ pub mod vault {
             &mut self,
             shares: U256,
         ) -> sails_rs::client::PendingCall<io::RequestUnbond, Self::Env>;
+        fn resolve_unconfirmed(
+            &mut self,
+            id: u64,
+            delivered: bool,
+        ) -> sails_rs::client::PendingCall<io::ResolveUnconfirmed, Self::Env>;
         fn resume(&mut self) -> sails_rs::client::PendingCall<io::Resume, Self::Env>;
         fn revoke_session(&mut self)
         -> sails_rs::client::PendingCall<io::RevokeSession, Self::Env>;
@@ -457,13 +493,14 @@ pub mod vault {
             &self,
             account: ActorId,
         ) -> sails_rs::client::PendingCall<io::Unbonds, Self::Env>;
+        fn unconfirmed(&self) -> sails_rs::client::PendingCall<io::Unconfirmed, Self::Env>;
     }
 
     pub struct VaultImpl;
 
     impl sails_rs::client::Identifiable for VaultImpl {
         const INTERFACE_ID: sails_rs::InterfaceId =
-            sails_rs::InterfaceId::from_bytes_8([30, 211, 98, 65, 146, 28, 254, 57]);
+            sails_rs::InterfaceId::from_bytes_8([75, 146, 157, 129, 158, 173, 136, 188]);
     }
 
     impl<E: sails_rs::client::GearEnv> Vault for sails_rs::client::Service<VaultImpl, E> {
@@ -545,6 +582,13 @@ pub mod vault {
         ) -> sails_rs::client::PendingCall<io::RequestUnbond, Self::Env> {
             self.pending_call((shares,))
         }
+        fn resolve_unconfirmed(
+            &mut self,
+            id: u64,
+            delivered: bool,
+        ) -> sails_rs::client::PendingCall<io::ResolveUnconfirmed, Self::Env> {
+            self.pending_call((id, delivered))
+        }
         fn resume(&mut self) -> sails_rs::client::PendingCall<io::Resume, Self::Env> {
             self.pending_call(())
         }
@@ -582,6 +626,9 @@ pub mod vault {
         ) -> sails_rs::client::PendingCall<io::Unbonds, Self::Env> {
             self.pending_call((account,))
         }
+        fn unconfirmed(&self) -> sails_rs::client::PendingCall<io::Unconfirmed, Self::Env> {
+            self.pending_call(())
+        }
     }
 
     pub mod io {
@@ -601,13 +648,15 @@ pub mod vault {
         sails_rs::io_struct_impl!(Rate () -> U256, 12, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(Redeem (shares: U256) -> super::Result<super::RedeemPreview, super::VaultError, >, 13, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
         sails_rs::io_struct_impl!(RequestUnbond (shares: U256) -> super::Result<super::Unbond, super::VaultError, >, 14, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Resume () -> super::Result<bool, super::VaultError, >, 15, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(RevokeSession () -> bool, 16, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Session (owner: ActorId) -> super::Option<super::Session, >, 17, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(SessionOwner (key: ActorId) -> super::Option<ActorId, >, 18, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(SetConfig (instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> super::Result<bool, super::VaultError, >, 19, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(TransferAdmin (to: ActorId) -> super::Result<bool, super::VaultError, >, 20, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
-        sails_rs::io_struct_impl!(Unbonds (account: ActorId) -> Vec<super::Unbond>, 21, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(ResolveUnconfirmed (id: u64, delivered: bool) -> super::Result<bool, super::VaultError, >, 15, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Resume () -> super::Result<bool, super::VaultError, >, 16, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(RevokeSession () -> bool, 17, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Session (owner: ActorId) -> super::Option<super::Session, >, 18, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(SessionOwner (key: ActorId) -> super::Option<ActorId, >, 19, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(SetConfig (instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64) -> super::Result<bool, super::VaultError, >, 20, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(TransferAdmin (to: ActorId) -> super::Result<bool, super::VaultError, >, 21, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Unbonds (account: ActorId) -> Vec<super::Unbond>, 22, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
+        sails_rs::io_struct_impl!(Unconfirmed () -> Vec<super::Unconfirmed>, 23, <super::VaultImpl as sails_rs::client::Identifiable>::INTERFACE_ID);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -680,6 +729,15 @@ pub mod vault {
                 assets: U256,
                 claimable_at: u64,
             },
+            #[codec(index = 13)]
+            UnconfirmedRecorded {
+                id: u64,
+                owner: ActorId,
+                kind: UnconfirmedKind,
+                assets: U256,
+            },
+            #[codec(index = 14)]
+            UnconfirmedResolved { id: u64, delivered: bool },
         }
 
         impl VaultEvents {
@@ -698,6 +756,8 @@ pub mod vault {
                     Self::SessionProposed { .. } => 10,
                     Self::SessionRevoked { .. } => 11,
                     Self::UnbondRequested { .. } => 12,
+                    Self::UnconfirmedRecorded { .. } => 13,
+                    Self::UnconfirmedResolved { .. } => 14,
                 }
             }
         }

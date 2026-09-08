@@ -1,7 +1,7 @@
 
 !@sails: 1.0.1
 
-service Vft@0x886e850e2c9f318b {
+service Vft@0x3b5c6650d0dfc7a9 {
     events {
         Approval {
             owner: ActorId,
@@ -61,6 +61,11 @@ service Vft@0x886e850e2c9f318b {
             NotEnoughGas {
                 required: u64,
             },
+            /// The token did not reply in time. The transfer may or may not have happened: the call is
+            /// recorded under this id and the admin settles it with `resolve_unconfirmed`.
+            Unconfirmed {
+                id: u64,
+            },
             /// The session key acting for the owner has expired.
             SessionExpired,
             /// The session key acting for the owner may not perform this action.
@@ -71,7 +76,7 @@ service Vft@0x886e850e2c9f318b {
     }
 }
 
-service Vault@0x1ed36241921cfe39 {
+service Vault@0x4b929d819ead88bc {
     events {
         AdminTransferred {
             from: ActorId,
@@ -136,6 +141,16 @@ service Vault@0x1ed36241921cfe39 {
             assets: U256,
             claimable_at: u64,
         },
+        UnconfirmedRecorded {
+            id: u64,
+            owner: ActorId,
+            kind: UnconfirmedKind,
+            assets: U256,
+        },
+        UnconfirmedResolved {
+            id: u64,
+            delivered: bool,
+        },
     }
     functions {
         AcceptSession(owner: ActorId) -> Result<Session, VaultError>;
@@ -159,6 +174,7 @@ service Vault@0x1ed36241921cfe39 {
         Rate() -> U256;
         Redeem(shares: U256) -> Result<RedeemPreview, VaultError>;
         RequestUnbond(shares: U256) -> Result<Unbond, VaultError>;
+        ResolveUnconfirmed(id: u64, delivered: bool) -> Result<bool, VaultError>;
         Resume() -> Result<bool, VaultError>;
         RevokeSession() -> bool;
         @query
@@ -169,6 +185,8 @@ service Vault@0x1ed36241921cfe39 {
         TransferAdmin(to: ActorId) -> Result<bool, VaultError>;
         @query
         Unbonds(account: ActorId) -> [Unbond];
+        @query
+        Unconfirmed() -> [Unconfirmed];
     }
     types {
         struct Position {
@@ -203,6 +221,19 @@ service Vault@0x1ed36241921cfe39 {
             requested_at: u64,
             claimable_at: u64,
         }
+        struct Unconfirmed {
+            id: u64,
+            owner: ActorId,
+            kind: UnconfirmedKind,
+            assets: U256,
+        }
+        /// A token call whose reply never arrived. `Deposit` and `Rewards` pulled tokens that are not
+        /// on the books; `Payout` sent tokens the books already count as paid.
+        enum UnconfirmedKind {
+            Deposit,
+            Rewards,
+            Payout,
+        }
         enum VaultError {
             Paused,
             ZeroAddress,
@@ -231,6 +262,11 @@ service Vault@0x1ed36241921cfe39 {
             /// The message carried less gas than the async flow needs; nothing was moved.
             NotEnoughGas {
                 required: u64,
+            },
+            /// The token did not reply in time. The transfer may or may not have happened: the call is
+            /// recorded under this id and the admin settles it with `resolve_unconfirmed`.
+            Unconfirmed {
+                id: u64,
             },
             /// The session key acting for the owner has expired.
             SessionExpired,
@@ -265,9 +301,13 @@ service Vault@0x1ed36241921cfe39 {
             /// When the current tranche is fully vested (0 when nothing is vesting).
             vesting_ends_at: u64,
             fees_accrued: U256,
+            /// Fees of redeems whose payout is still in flight; collectable once it landed.
+            fees_pending: U256,
             unbonding_total: U256,
             min_deposit: U256,
             paused: bool,
+            /// Token calls waiting for the admin to settle them.
+            unconfirmed: u32,
         }
     }
 }
@@ -277,7 +317,7 @@ program Vault {
         New(underlying: ActorId, name: String, symbol: String, decimals: u8, instant_fee_bps: u32, unbond_period_secs: u64, vesting_period_secs: u64, initial_rate: U256);
     }
     services {
-        Vft@0x886e850e2c9f318b,
-        Vault@0x1ed36241921cfe39,
+        Vft@0x3b5c6650d0dfc7a9,
+        Vault@0x4b929d819ead88bc,
     }
 }

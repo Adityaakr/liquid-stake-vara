@@ -272,7 +272,7 @@ export class Pool {
         return this._typeResolver.registry;
     }
     public get interfaceId(): InterfaceId {
-        return InterfaceId.from("0x736202f2ca7c8e83");
+        return InterfaceId.from("0xa7f9b49ce1eb4b78");
     }
     public acceptSession(owner: ActorId): TransactionBuilderWithHeader<{ ok: Session } | { err: PoolError }> {
         return new TransactionBuilderWithHeader<{ ok: Session } | { err: PoolError }>(
@@ -437,12 +437,25 @@ export class Pool {
         );
     }
 
+    public rescueSurplus(to: ActorId, assets: bigint): TransactionBuilderWithHeader<{ ok: bigint } | { err: PoolError }> {
+        return new TransactionBuilderWithHeader<{ ok: bigint } | { err: PoolError }>(
+            this._api,
+            this.registry,
+            "send_message",
+            SailsMessageHeader.v1(this.interfaceId, 13, this._routeIdx),
+            [to, assets],
+            this._typeResolver.getTypeDeclString({"kind":"tuple","types":["ActorId", "U256"]}),
+            this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["U256",{"kind":"named","name":"PoolError"}]}),
+            this._programId,
+        );
+    }
+
     public resume(): TransactionBuilderWithHeader<{ ok: boolean } | { err: PoolError }> {
         return new TransactionBuilderWithHeader<{ ok: boolean } | { err: PoolError }>(
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 13, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 14, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"PoolError"}]}),
@@ -455,7 +468,7 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 14, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 15, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString("bool"),
@@ -468,7 +481,7 @@ export class Pool {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 15, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 16, this._routeIdx),
             owner,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Option","generics":[{"kind":"named","name":"Session"}]}),
@@ -480,7 +493,7 @@ export class Pool {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 16, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 17, this._routeIdx),
             key,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Option","generics":["ActorId"]}),
@@ -492,7 +505,7 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 17, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 18, this._routeIdx),
             [instant_fee_bps, unbond_period_secs, vesting_period_secs],
             this._typeResolver.getTypeDeclString({"kind":"tuple","types":["u32", "u64", "u64"]}),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"PoolError"}]}),
@@ -505,7 +518,7 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 18, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 19, this._routeIdx),
             null,
             null,
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["U256",{"kind":"named","name":"PoolError"}]}),
@@ -518,7 +531,7 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 19, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 20, this._routeIdx),
             to,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":["bool",{"kind":"named","name":"PoolError"}]}),
@@ -531,7 +544,7 @@ export class Pool {
             this._api,
             this.registry,
             this._programId,
-            SailsMessageHeader.v1(this.interfaceId, 20, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 21, this._routeIdx),
             account,
             this._typeResolver.getTypeDeclString("ActorId"),
             this._typeResolver.getTypeDeclString({"kind":"slice","item":{"kind":"named","name":"Unbond"}}),
@@ -543,7 +556,7 @@ export class Pool {
             this._api,
             this.registry,
             "send_message",
-            SailsMessageHeader.v1(this.interfaceId, 21, this._routeIdx),
+            SailsMessageHeader.v1(this.interfaceId, 22, this._routeIdx),
             shares,
             this._typeResolver.getTypeDeclString("U256"),
             this._typeResolver.getTypeDeclString({"kind":"named","name":"Result","generics":[{"kind":"named","name":"UnstakePreview"},{"kind":"named","name":"PoolError"}]}),
@@ -716,6 +729,21 @@ export class Pool {
         });
     }
 
+    public subscribeToSurplusRescuedEvent<T = { to: ActorId; assets: bigint }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
+        const interfaceIdu64 = this.interfaceId.asU64();
+        const eventFields = {"fields":[{"name":"to","type":"ActorId"},{"name":"assets","type":"U256"}]}.fields as IStructField[];
+        const typeStr = this._typeResolver.getStructDef(eventFields, {}, true);
+        return this._api.gearEvents.subscribeToGearEvent("UserMessageSent", ({ data: { message } }) => {
+            if (!message.source.eq(this._programId)) return;
+            if (!message.destination.eq(ZERO_ADDRESS)) return;
+
+            const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 11) {
+                callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
+            }
+        });
+    }
+
     public subscribeToUnbondRequestedEvent<T = { owner: ActorId; id: number; shares: bigint; assets: bigint; claimable_at: number }>(callback: (eventData: T) => void | Promise<void>): Promise<() => void> {
         const interfaceIdu64 = this.interfaceId.asU64();
         const eventFields = {"fields":[{"name":"owner","type":"ActorId"},{"name":"id","type":"u64"},{"name":"shares","type":"U256"},{"name":"assets","type":"U256"},{"name":"claimable_at","type":"u64"}]}.fields as IStructField[];
@@ -725,7 +753,7 @@ export class Pool {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 11) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 12) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });
@@ -740,7 +768,7 @@ export class Pool {
             if (!message.destination.eq(ZERO_ADDRESS)) return;
 
             const { ok, header } = SailsMessageHeader.tryFromBytes(message.payload);
-            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 12) {
+            if (ok && header.interfaceId.asU64() === interfaceIdu64 && header.entryId === 13) {
                 callback(this.registry.createType(`([u8; 16], ${typeStr})`, message.payload)[1].toJSON() as T);
             }
         });

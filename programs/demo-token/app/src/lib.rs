@@ -2,7 +2,7 @@
 //!
 //! A standard Vara Fungible Token (VFT) with two extras that a demo needs:
 //!
-//! * an `Admin` service with a minter role, so the vault can mint yield, and
+//! * an `Admin` service with a minter role (the deployer mints demo balances and rewards), and
 //! * a public `Faucet` so anyone can pick up test balance on mainnet.
 //!
 //! The `Vft` service exposes exactly the VFT standard surface (routes and

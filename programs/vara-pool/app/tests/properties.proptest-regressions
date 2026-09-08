@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6a1e9642cbbaf60f6bccfa9970045542c37245fab4642671415c4d552a962435 # shrinks to cfg = Cfg { fee_bps: 0, unbond_secs: 0, vesting_secs: 3600, initial_rate: 1000000000000000000 }, steps = [Step { op: Stake { who: 3, amount: 1000000000000 }, probe: 1000000000000 }, Step { op: Fund { amount: 1000002000002 }, probe: 1000000000000 }, Step { op: Advance { dt_ms: 3600000 }, probe: 1000000000000 }, Step { op: Unstake { who: 3, pct: 100, payout_fails: true }, probe: 1000000000000 }]

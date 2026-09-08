@@ -190,21 +190,22 @@ async fn rewards_vest_linearly_and_are_paid_from_holdings() {
 
     w.skip_secs(VESTING_SECS);
     let info = w.vault.vault().info().await.unwrap();
-    assert_eq!(info.rate, U256::from(SCALE + SCALE / 10), "fully vested: 1.10");
+    let full = U256::from(SCALE + SCALE / 10);
+    assert!(info.rate <= full && info.rate + U256::from(SCALE / 100_000) >= full, "fully vested: 1.10 up to the virtual offset, got {}", info.rate);
     assert_eq!((info.apy_bps, info.locked_rewards, info.vesting_ends_at), (0, U256::zero(), 0));
 
     let preview = w.vault.vault().preview_redeem(u(500 * ONE)).await.unwrap();
     let bob_before = w.token_balance(actor(BOB)).await;
     let out = w.vault_as(BOB).vault().redeem(u(500 * ONE)).await.unwrap().unwrap();
     assert_eq!(out, preview);
-    assert_eq!(out.assets, u(550 * ONE), "principal plus the whole tranche");
+    assert!(out.assets <= u(550 * ONE) && out.assets + u(ONE / 100) >= u(550 * ONE), "principal plus the whole tranche up to the virtual offset: {}", out.assets);
     assert_eq!(out.fee, out.assets * U256::from(FEE_BPS) / U256::from(10_000u64));
     assert_eq!(w.token_balance(actor(BOB)).await, bob_before + out.net);
     assert_eq!(w.shares(actor(BOB)).await, U256::zero());
     let info = w.vault.vault().info().await.unwrap();
     assert_eq!(info.total_shares, U256::zero());
     assert_eq!(info.fees_accrued, out.fee);
-    assert_eq!(info.holdings, out.fee, "only the fee is left");
+    assert!(info.holdings >= out.fee && info.holdings < out.fee + u(ONE / 100), "only the fee and the virtual offset's dust are left: {}", info.holdings);
     assert_eq!(info.rate, U256::from(SCALE + SCALE / 10), "an empty vault keeps its last rate");
 }
 
@@ -371,6 +372,16 @@ async fn proposing_a_stranger_as_key_cannot_capture_their_deposit() {
 }
 
 #[tokio::test]
+async fn value_attached_to_a_vault_command_comes_back() {
+    let w = setup().await;
+    let bob_before = w.env.system().balance_of(BOB);
+    let shares = okOf(w.vault_as(BOB).vault().deposit(u(100 * ONE)).with_value(5 * 1_000_000_000_000u128).await.unwrap());
+    assert_eq!(shares, u(100 * ONE));
+    let spent = bob_before - w.env.system().balance_of(BOB);
+    assert!(spent < 1_000_000_000_000u128, "the 5 VARA came back with the reply, only gas was spent: {spent}");
+}
+
+#[tokio::test]
 async fn expired_session_is_rejected() {
     let w = setup().await;
     let key: u64 = 515_151;
@@ -378,7 +389,9 @@ async fn expired_session_is_rejected() {
     okOf(w.vault_as(BOB).vault().create_session(actor(key), 30, vec![vault::SessionAction::Deposit]).await.unwrap());
     okOf(w.vault_as(key).vault().accept_session(actor(BOB)).await.unwrap());
     w.skip_secs(31);
+    // Expired: the key is a plain account again, so this is its own (unfunded) deposit.
     let late = w.vault_as(key).vault().deposit(u(10 * ONE)).await.unwrap();
-    assert_eq!(late, Err(vault::VaultError::SessionExpired));
+    assert!(matches!(late, Err(vault::VaultError::TokenRejected(_))), "{late:?}");
+    assert_eq!(w.shares(actor(BOB)).await, U256::zero(), "nothing was booked to bob");
     assert_eq!(w.vault.vault().session(actor(BOB)).await.unwrap(), None);
 }
